@@ -39,9 +39,12 @@ echo "[OK]"
 echo ""
 echo "[3/6] TLS 证书..."
 if [ ! -f /etc/nginx/tls/tls_cert.pem ] || [ ! -f /etc/nginx/tls/tls_key.pem ]; then
-    /scripts/generate_tls_certs.sh
+    if ! /scripts/generate_tls_certs.sh; then
+        echo "[ERROR] Nginx TLS 证书生成失败，容器退出"
+        exit 1
+    fi
 else
-    echo "[OK] 已存在"
+    echo "[OK] TLS 证书已存在"
 fi
 
 echo ""
