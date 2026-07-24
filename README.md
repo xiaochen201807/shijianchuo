@@ -4,7 +4,8 @@
 
 **部署形态：All-in-One 单镜像**（`GmSSL3 + nginx + fcgiwrap + chrony`，supervisor 托管），并提供 **Java Spring Boot Starter** 客户端 SDK。
 
-> 完整操作手册见 [`docs/operation-manual.md`](docs/operation-manual.md)
+> - 完整操作手册：[`docs/operation-manual.md`](docs/operation-manual.md)  
+> - **服务器拉取部署 + 测试**（Compose 全文）：[`docs/server-deploy-and-test.md`](docs/server-deploy-and-test.md)
 
 ---
 
@@ -57,11 +58,12 @@ curl http://localhost:8080/info
 
 ### 3. 使用 GHCR 预构建镜像（免本地编译）
 
-```powershell
-$env:GHCR_OWNER = "xiaochen201807"
-$env:GHCR_REPO  = "shijianchuo"
-$env:IMAGE_TAG  = "latest"
+服务器侧 **Compose 全文、端口、测试命令** 见：
 
+**→ [`docs/server-deploy-and-test.md`](docs/server-deploy-and-test.md)**
+
+```powershell
+$env:IMAGE_TAG = "latest"
 # 私有包需: docker login ghcr.io
 docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
