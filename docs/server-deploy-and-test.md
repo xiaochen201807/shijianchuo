@@ -2,8 +2,11 @@
 
 > **适用镜像**：`ghcr.io/xiaochen201807/shijianchuo/tsa`  
 > **架构**：`linux/amd64` + `linux/arm64`（`docker pull` 自动选择）  
-> **内含进程**：nginx + fcgiwrap + GmSSL3 + chrony（supervisor 托管）  
-> **仓库**：https://github.com/xiaochen201807/shijianchuo
+> **内含进程**：nginx + fcgiwrap + **Tongsuo(国密 OpenSSL)** + chrony（supervisor 托管）  
+> **仓库**：https://github.com/xiaochen201807/shijianchuo  
+>
+> **说明**：GmSSL 3 的 `gmssl` 已无 `ecparam`/`req`/`ts` 等 OpenSSL 兼容命令，无法直接做 RFC 3161。  
+> 本镜像使用 **Tongsuo** 提供 SM2/SM3 与 `openssl ts -reply`。
 
 ---
 
@@ -310,8 +313,10 @@ openssl x509 -in tsacert.pem -inform PEM -noout -subject -dates 2>/dev/null || t
 docker exec tsa supervisorctl status
 # 期望 chronyd / fcgiwrap / nginx 均为 RUNNING
 
-# GmSSL
-docker exec tsa gmssl version
+# 国密 OpenSSL (Tongsuo)
+docker exec tsa openssl version
+# 或
+docker exec tsa /usr/local/tongsuo/bin/openssl version
 
 # NTP 跟踪（需要容器有网络访问 NTP）
 docker exec tsa chronyc tracking
@@ -328,21 +333,18 @@ docker exec tsa ls -la /etc/tsa/certs/
 # 在容器内创建测试数据
 docker exec tsa bash -c 'echo "hello-tsa-$(date +%s)" > /tmp/test.txt'
 
-# 生成 TimeStampReq（SM3）
+# 生成 TimeStampReq（SM3）并签发（容器内 Tongsuo）
 docker exec tsa bash -c '
-  gmssl ts -query -data /tmp/test.txt -sm3 -cert -out /tmp/query.tsq
+  export PATH=/usr/local/tongsuo/bin:$PATH
+  export LD_LIBRARY_PATH=/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64:$LD_LIBRARY_PATH
+  openssl ts -query -data /tmp/test.txt -sm3 -cert -out /tmp/query.tsq
   ls -l /tmp/query.tsq
-'
-
-# 通过本机 nginx 发送时间戳请求（容器内 127.0.0.1:80）
-docker exec tsa bash -c '
   curl -sS -X POST http://127.0.0.1/tsa \
     -H "Content-Type: application/timestamp-query" \
     --data-binary @/tmp/query.tsq \
     -o /tmp/response.tsr
   ls -l /tmp/response.tsr
-  # 打印响应摘要（若 gmssl 支持 text）
-  gmssl ts -reply -in /tmp/response.tsr -text 2>/dev/null | head -40 || \
+  openssl ts -reply -in /tmp/response.tsr -text 2>/dev/null | head -40 || \
     echo "response size: $(stat -c%s /tmp/response.tsr) bytes"
 '
 ```

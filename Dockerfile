@@ -1,21 +1,27 @@
 # ============================================================
 # RFC 3161 国密 TSA — All-in-One 镜像
-# 内含: GmSSL3 + fcgiwrap + nginx + chrony (supervisor 托管)
-# 多架构: linux/amd64, linux/arm64
+# 内含: Tongsuo(OpenSSL 国密) + fcgiwrap + nginx + chrony
+#
+# 说明:
+#   原方案使用 GmSSL 3 的 `gmssl` CLI，但 GmSSL 3 已重写命令集，
+#   不再提供 ecparam/req/x509/ts 等 OpenSSL 兼容子命令，也无法做 RFC 3161。
+#   故改用 Tongsuo（支持 SM2/SM3 + openssl ts -reply），接口与脚本兼容。
 # ============================================================
 
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
-    LANG=C.UTF-8
+    LANG=C.UTF-8 \
+    PATH=/usr/local/tongsuo/bin:$PATH \
+    LD_LIBRARY_PATH=/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64:$LD_LIBRARY_PATH \
+    OPENSSL_BIN=/usr/local/tongsuo/bin/openssl
 
 # ----------------------------------------------------------
-# 系统依赖: 编译工具 + nginx + chrony + fcgiwrap + supervisor
+# 系统依赖
 # ----------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
-        cmake \
         git \
         perl \
         pkg-config \
@@ -27,7 +33,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         nginx \
         chrony \
         supervisor \
-        openssl \
         tzdata \
         procps \
         iproute2 \
@@ -38,19 +43,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -f /etc/nginx/sites-enabled/default
 
 # ----------------------------------------------------------
-# 编译安装 GmSSL3
+# 编译安装 Tongsuo (国密 OpenSSL: SM2/SM3 + RFC 3161 ts)
 # ----------------------------------------------------------
-RUN git clone --depth 1 https://github.com/guanzhi/GmSSL.git /tmp/GmSSL \
-    && cd /tmp/GmSSL \
-    && mkdir build && cd build \
-    && cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
+RUN git clone --depth 1 https://github.com/Tongsuo-Project/Tongsuo.git /tmp/Tongsuo \
+    && cd /tmp/Tongsuo \
+    && ./config \
+        --prefix=/usr/local/tongsuo \
+        --openssldir=/usr/local/tongsuo/ssl \
+        shared \
+        enable-ntls \
+        -Wl,-rpath,/usr/local/tongsuo/lib \
     && make -j"$(nproc)" \
-    && make install \
+    && make install_sw \
     && ldconfig \
-    && rm -rf /tmp/GmSSL \
-    && gmssl version
+    && rm -rf /tmp/Tongsuo \
+    && /usr/local/tongsuo/bin/openssl version \
+    && /usr/local/tongsuo/bin/openssl list -public-key-algorithms 2>/dev/null | head -20 || true \
+    && ln -sf /usr/local/tongsuo/bin/openssl /usr/local/bin/openssl-gm \
+    && ln -sf /usr/local/tongsuo/bin/openssl /usr/local/bin/gmssl
 
 # ----------------------------------------------------------
 # 目录结构
@@ -74,18 +84,15 @@ RUN mkdir -p \
     && chmod -R 755 /etc/tsa
 
 # ----------------------------------------------------------
-# 配置与脚本 (构建上下文为仓库根目录)
+# 配置与脚本
 # ----------------------------------------------------------
-# TSA / GmSSL 配置与 CGI
 COPY tsa-server/config/tsa.cnf /etc/tsa/openssl/tsa.cnf
 COPY tsa-server/config/tsa_ext.cnf /etc/tsa/openssl/tsa_ext.cnf
 COPY tsa-server/scripts/generate_certs.sh /scripts/generate_certs.sh
 COPY tsa-server/scripts/tsa_cgi.sh /var/www/tsa/tsa_cgi.sh
 
-# All-in-one 运维脚本与进程配置
 COPY docker/all-in-one/nginx.conf /etc/nginx/nginx.conf
 COPY docker/all-in-one/chrony.conf /etc/chrony/chrony.conf
-# 作为主配置使用（避免与 conf.d 重复 section）
 COPY docker/all-in-one/supervisord.conf /etc/supervisor/supervisord.conf
 COPY docker/all-in-one/entrypoint.sh /scripts/entrypoint.sh
 COPY docker/all-in-one/healthcheck.sh /scripts/healthcheck.sh
@@ -98,7 +105,6 @@ RUN chmod +x \
         /scripts/healthcheck.sh \
         /var/www/tsa/tsa_cgi.sh
 
-# HTTP / HTTPS (FastCGI 仅本机 127.0.0.1:9000，不对外暴露)
 EXPOSE 80 443
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \

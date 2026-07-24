@@ -2,7 +2,9 @@
 
 自建 **RFC 3161** 合规时间戳授权机构（TSA），支持 **SM2 / SM3 国密算法**。
 
-**部署形态：All-in-One 单镜像**（`GmSSL3 + nginx + fcgiwrap + chrony`，supervisor 托管），并提供 **Java Spring Boot Starter** 客户端 SDK。
+**部署形态：All-in-One 单镜像**（`Tongsuo 国密 OpenSSL + nginx + fcgiwrap + chrony`，supervisor 托管），并提供 **Java Spring Boot Starter** 客户端 SDK。
+
+> **密码库说明**：GmSSL 3 CLI 不再兼容 `ecparam`/`ts` 等 OpenSSL 命令，RFC 3161 签发改用 **Tongsuo**（SM2/SM3 + `openssl ts`）。
 
 > - 完整操作手册：[`docs/operation-manual.md`](docs/operation-manual.md)  
 > - **服务器拉取部署 + 测试**（Compose 全文）：[`docs/server-deploy-and-test.md`](docs/server-deploy-and-test.md)

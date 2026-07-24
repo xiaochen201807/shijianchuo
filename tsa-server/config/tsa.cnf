@@ -1,15 +1,7 @@
 # ============================================================
-# GmSSL3/OpenSSL TSA 配置文件
-# 用于 RFC 3161 时间戳授权机构
+# Tongsuo / OpenSSL TSA 配置 (RFC 3161)
+# 国密: SM2 签名证书 + SM3 摘要
 # ============================================================
-
-# --- GmSSL 主配置 ---
-[gmssl_def]
-# 启用国密引擎
-engines = engine_section
-
-[engine_section]
-# SM2/SM3 引擎配置 (GmSSL3 内置)
 
 # --- CA 配置 ---
 [ca]
@@ -19,8 +11,8 @@ default_ca = CA_default
 dir               = /etc/tsa
 certs             = $dir/certs
 new_certs_dir     = $dir/certs
-database          = $dir/index.txt
-serial            = $dir/certs/serial
+database          = $dir/certs/index.txt
+serial            = $dir/certs/caserial.srl
 RANDFILE          = $dir/certs/.rand
 
 certificate       = $dir/certs/cacert.pem
@@ -33,53 +25,32 @@ preserve          = no
 policy            = policy_match
 
 [policy_match]
-countryName            = match
-stateOrProvinceName    = match
-organizationName      = match
-organizationalUnitName = optional
-commonName            = supplied
-emailAddress          = optional
+countryName             = match
+stateOrProvinceName     = match
+organizationName        = match
+organizationalUnitName  = optional
+commonName              = supplied
+emailAddress            = optional
 
-# --- TSA 配置 ---
-# 这是核心配置，ts -reply 命令读取此节
+# --- TSA 配置 (openssl ts -reply -section tsa) ---
 [tsa]
 default_tsa = tsa_config1
 
 [tsa_config1]
-# TSA 根目录
 dir = /etc/tsa
-
-# 序列号文件 (自动递增)
 serial = $dir/certs/tsaserial
-
-# TSA 签名证书
 signer_cert = $dir/certs/tsacert.pem
-
-# TSA 签名私钥
 signer_key = $dir/certs/tsakey.pem
-
-# 证书链 (CA 证书)
 certs = $dir/certs/cacert.pem
-
-# 默认时间戳策略 OID
 default_policy = 1.2.3.4.1
-
-# 其他支持的策略 OID
 other_policies = 1.2.3.4.5
-
-# 默认摘要算法 (国密 SM3)
-digests = sm3, sha1, sha256, sha384, sha512
-
-# 准确时间精度 (秒)
+# 国密 SM3 + 常见摘要
+digests = sm3, sha256, sha384, sha512
 accuracy = secs:1, millisecs:0, microsecs:0
-
-# 时间戳生成时钟 (使用 UTC)
 clock_precision_digits = 0
-
-# 是否在响应中包含签名证书
 ess_cert_id_chain = no
 
-# --- 证书请求配置 ---
+# --- 证书请求 ---
 [req]
 default_bits        = 256
 default_md          = sm3
@@ -96,35 +67,15 @@ O  = MyOrg
 OU = TSA
 CN = TSA Server
 
-# --- CA 证书扩展 ---
 [v3_ca]
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 basicConstraints = critical, CA:true
 keyUsage = critical, digitalSignature, cRLSign, keyCertSign
-extendedKeyUsage = timeStamping
 
-# --- TSA 证书扩展 (关键!) ---
 [v3_tsa]
-# 基本约束
 basicConstraints = critical, CA:false
-
-# 密钥用途: 仅数字签名
 keyUsage = critical, digitalSignature
-
-# 扩展密钥用途: 时间戳 (RFC 3161 必需)
 extendedKeyUsage = critical, timeStamping
-
-# 主题密钥标识符
 subjectKeyIdentifier = hash
-
-# 颁发者密钥标识符
 authorityKeyIdentifier = keyid:always,issuer
-
-# 签名算法: SM2 + SM3
-# (由 GmSSL3 自动处理)
-
-# --- SM2 曲线参数 ---
-[sm2_params]
-# SM2 椭圆曲线参数 (GmSSL3 内置 sm2p256v1)
-# 无需手动配置，GmSSL3 自动识别
