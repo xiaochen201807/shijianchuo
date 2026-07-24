@@ -9,6 +9,12 @@ set -e
 export PATH="/usr/local/tongsuo/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export OPENSSL_BIN="${OPENSSL_BIN:-/usr/local/tongsuo/bin/openssl}"
+# 避免指向不存在的 /etc/ssl/openssl.cnf 导致 openssl 子命令失败
+if [ -f /usr/local/tongsuo/ssl/openssl.cnf ]; then
+    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
+else
+    unset OPENSSL_CONF || true
+fi
 
 echo "============================================"
 echo "  RFC 3161 国密 TSA 最终镜像启动"

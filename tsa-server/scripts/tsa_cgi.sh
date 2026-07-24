@@ -23,7 +23,12 @@ elif [ -x /usr/local/bin/openssl-gm ]; then
 else
     OPENSSL_BIN="$(command -v openssl || true)"
 fi
-export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [ -f /usr/local/tongsuo/ssl/openssl.cnf ]; then
+    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
+else
+    unset OPENSSL_CONF || true
+fi
 
 if [ "${REQUEST_METHOD}" != "POST" ]; then
     log_error "Invalid method: ${REQUEST_METHOD}"
