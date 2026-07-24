@@ -1,0 +1,22 @@
+.git
+.github
+.idea
+.mvn
+**/target
+**/*.iml
+sdk
+sdk-demo
+docs
+scripts
+*.md
+.env
+.env.*
+!.env.example
+docker-compose*.yml
+# 旧分体镜像目录中的 Dockerfile（构建 all-in-one 不需要）
+nginx
+chrony
+# 保留 tsa-server 的 config/scripts，忽略其独立 Dockerfile
+tsa-server/Dockerfile
+tsa-server/scripts/entrypoint.sh
+tsa-server/scripts/healthcheck.sh

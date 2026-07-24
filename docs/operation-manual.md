@@ -1,10 +1,10 @@
 # RFC 3161 国密 TSA 服务器 — 完整操作手册
 
-> **版本**: 1.0.0  
-> **日期**: 2026-07-21  
+> **版本**: 2.0.0  
+> **日期**: 2026-07-24  
 > **适用场景**: 电子签名、存证、时间戳服务  
 > **加密算法**: SM2 (签名) + SM3 (摘要) 国密算法  
-> **部署方案**: Docker Compose (GmSSL3 + nginx + fcgiwrap + chrony)
+> **部署方案**: **All-in-One 单镜像** (GmSSL3 + nginx + fcgiwrap + chrony，supervisor 托管)
 
 ---
 
@@ -66,30 +66,21 @@ TSA (Time Stamping Authority) 是时间戳授权机构，遵循 **RFC 3161** 协
 
 ## 2. 系统架构
 
-### 2.1 架构图
+### 2.1 架构图 (All-in-One)
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     Docker Compose 网络                       │
-│                                                              │
-│  ┌─────────────┐    ┌──────────────────┐    ┌─────────────┐ │
-│  │   chrony    │    │   tsa-server     │    │    nginx    │ │
-│  │             │    │                  │    │             │ │
-│  │  NTP 时间   │◄──►│  GmSSL3 +        │◄──►│  反向代理   │ │
-│  │  同步服务   │    │  fcgiwrap +      │    │  HTTP/HTTPS │ │
-│  │             │    │  CGI 脚本        │    │             │ │
-│  │  Port: 123  │    │  Port: 9000      │    │  Port: 80  │ │
-│  │   (UDP)     │    │   (FastCGI)      │    │  Port: 443  │ │
-│  └─────────────┘    └──────────────────┘    └──────┬──────┘ │
-│                                                     │        │
-└─────────────────────────────────────────────────────┼────────┘
-                                                      │
-                                              ┌───────┴───────┐
-                                              │   客户端       │
-                                              │               │
-                                              │ Java SDK     │
-                                              │ curl / postman│
-                                              └───────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  容器 tsa (单镜像)                                          │
+│                                                            │
+│   nginx :80/:443  ──FastCGI──►  fcgiwrap :9000 (127.0.0.1) │
+│                                      │                     │
+│                                      ▼                     │
+│                               tsa_cgi.sh → gmssl ts        │
+│                                                            │
+│   chronyd (NTP)     supervisor 托管全部进程                 │
+└────────────────────────────┬───────────────────────────────┘
+                             │
+                      客户端 / Java SDK
 ```
 
 ### 2.2 请求流程
@@ -1334,9 +1325,11 @@ pwsh ./scripts/test_tsa.ps1
 
 | 文件 | 名称 | 说明 |
 |------|------|------|
-| `.github/workflows/docker-build.yml` | Docker Build & Push | 构建并推送三组件镜像到 GHCR |
+| `.github/workflows/docker-build.yml` | Docker Build & Push | 构建 **1 个** All-in-One 多架构镜像 `.../tsa` |
 | `.github/workflows/maven-ci.yml` | Maven CI | 编译 SDK / Demo，上传 jar |
 | `.github/workflows/ci.yml` | CI | 路径变更检测与总览 |
+
+**镜像地址：** `ghcr.io/<owner>/<repo>/tsa:<tag>`
 
 ### 17.2 Docker 构建行为
 

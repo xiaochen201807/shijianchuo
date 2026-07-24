@@ -30,9 +30,9 @@ jobs:
         with:
           filters: |
             docker:
+              - 'Dockerfile'
+              - 'docker/**'
               - 'tsa-server/**'
-              - 'nginx/**'
-              - 'chrony/**'
               - 'docker-compose.yml'
               - '.github/workflows/docker-build.yml'
             maven:

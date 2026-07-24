@@ -1,6 +1,8 @@
 # RFC 3161 国密 TSA 服务器
 
-自建 **RFC 3161** 合规时间戳授权机构（TSA），支持 **SM2 / SM3 国密算法**，生产部署方案为 **nginx + fcgiwrap + GmSSL3 + chrony**，并提供 **Java Spring Boot Starter** 客户端 SDK。
+自建 **RFC 3161** 合规时间戳授权机构（TSA），支持 **SM2 / SM3 国密算法**。
+
+**部署形态：All-in-One 单镜像**（`GmSSL3 + nginx + fcgiwrap + chrony`，supervisor 托管），并提供 **Java Spring Boot Starter** 客户端 SDK。
 
 > 完整操作手册见 [`docs/operation-manual.md`](docs/operation-manual.md)
 
@@ -10,26 +12,26 @@
 
 ```
 客户端 (Java SDK / curl)
-        │  POST /tsa  (application/timestamp-query)
+        │  POST /tsa
         ▼
-   ┌─────────┐   FastCGI :9000   ┌──────────────────────┐
-   │  nginx  │ ────────────────► │ tsa-server           │
-   │ 80/443  │                   │ GmSSL3 + fcgiwrap    │
-   └─────────┘                   │ tsa_cgi.sh → ts reply│
-                                 └──────────┬───────────┘
-                                            │ 系统时钟
-                                 ┌──────────▼───────────┐
-                                 │ chrony (NTP 同步)    │
-                                 └──────────────────────┘
+┌─────────────────────────────────────────────┐
+│  单个容器 tsa (All-in-One)                   │
+│                                             │
+│  nginx :80/:443                             │
+│      │ FastCGI 127.0.0.1:9000               │
+│      ▼                                      │
+│  fcgiwrap → tsa_cgi.sh → gmssl ts -reply    │
+│  chronyd (NTP)                              │
+│  supervisor 进程托管                         │
+└─────────────────────────────────────────────┘
 ```
 
-| 组件 | 职责 |
+| 进程 | 职责 |
 |------|------|
-| **chrony** | NTP 时间同步，保证时间戳可信 |
-| **tsa-server** | GmSSL3 编译安装 + fcgiwrap + CGI 签发 SM2/SM3 时间戳 |
-| **nginx** | HTTP/HTTPS 入口，FastCGI 反代到 fcgiwrap |
+| **chronyd** | NTP 时间同步 |
+| **fcgiwrap** | 执行 CGI，调用 GmSSL3 签发 SM2/SM3 时间戳 |
+| **nginx** | HTTP/HTTPS 入口与证书下载 |
 | **sdk** | Spring Boot Starter：`TsaClient` + `Sm2Util` + `Sm3Util` |
-| **sdk-demo** | REST 演示应用（端口 9090） |
 
 ---
 
@@ -41,10 +43,9 @@
 - 内存建议 ≥ 4GB（首次编译 GmSSL3 较慢）
 - JDK 21+、Maven 3.8+（仅 SDK / Demo 需要）
 
-### 2. 一键启动 TSA 服务
+### 2. 本地一键启动
 
 ```powershell
-# Windows PowerShell
 cd M:\shijianchuo
 docker compose up --build -d
 docker compose ps
@@ -52,43 +53,38 @@ curl http://localhost:8080/health
 curl http://localhost:8080/info
 ```
 
-```bash
-# Linux / macOS
-cd /path/to/shijianchuo
-docker compose up --build -d
-curl http://localhost:8080/health
-```
+首次构建约 **10–15 分钟**（编译 GmSSL3）。
 
-首次构建约 **10–15 分钟**（从源码编译 GmSSL3）。
-
-### 3. 编译 SDK 并启动 Demo
+### 3. 使用 GHCR 预构建镜像（免本地编译）
 
 ```powershell
-# 根目录多模块安装
-mvn clean install -DskipTests
+$env:GHCR_OWNER = "xiaochen201807"
+$env:GHCR_REPO  = "shijianchuo"
+$env:IMAGE_TAG  = "latest"
 
-# 启动 Demo
+# 私有包需: docker login ghcr.io
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+**唯一镜像地址：**
+
+```text
+ghcr.io/xiaochen201807/shijianchuo/tsa:latest
+```
+
+多架构：`linux/amd64` + `linux/arm64`，`docker pull` 自动选择。
+
+### 4. 编译 SDK 并启动 Demo
+
+```powershell
+mvn clean install -DskipTests
 cd sdk-demo
 mvn spring-boot:run
 ```
 
-Demo 默认：`http://localhost:9090`  
-TSA 默认：`http://localhost:8080/tsa`
-
-### 4. 快速验证
-
-```powershell
-# SM3
-curl "http://localhost:9090/api/sm3/hash?text=Hello"
-
-# 时间戳
-curl -X POST http://localhost:9090/api/tsa/timestamp/text `
-  -H "Content-Type: application/json" `
-  -d "{\"text\":\"Hello, TSA!\"}"
-
-# 或运行自测脚本
-pwsh ./scripts/test_tsa.ps1
-```
+- Demo：`http://localhost:9090`
+- TSA：`http://localhost:8080/tsa`
 
 ---
 
@@ -96,17 +92,17 @@ pwsh ./scripts/test_tsa.ps1
 
 ```
 shijianchuo/
-├── docker-compose.yml          # 一键编排: chrony + tsa-server + nginx
-├── .env                        # 端口 / 证书主题 / NTP / 策略 OID
-├── pom.xml                     # Maven 父工程 (sdk + sdk-demo)
-├── tsa-server/                 # GmSSL3 + fcgiwrap + CGI
-├── nginx/                      # 反向代理 + TLS
-├── chrony/                     # NTP
+├── Dockerfile                  # All-in-One 镜像（唯一构建入口）
+├── docker/all-in-one/          # supervisor / nginx / chrony / 入口脚本
+├── docker-compose.yml          # 本地构建并启动单容器
+├── docker-compose.ghcr.yml     # 拉取 GHCR 镜像启动
+├── tsa-server/                 # CGI、证书脚本、GmSSL 配置（被 Dockerfile COPY）
 ├── sdk/                        # Spring Boot Starter
-├── sdk-demo/                   # 示例 REST 应用
-├── scripts/                    # 自测脚本
-└── docs/operation-manual.md    # 完整操作手册
+├── sdk-demo/                   # REST 演示
+└── .github/workflows/          # 多架构构建推送 ghcr.io/.../tsa
 ```
+
+> 历史分体目录 `nginx/`、`chrony/` 及旧 Dockerfile 已不再用于部署，仅作参考。
 
 ---
 
@@ -114,19 +110,17 @@ shijianchuo/
 
 | 路径 | 方法 | 说明 |
 |------|------|------|
-| `/tsa` | POST | RFC 3161 时间戳（`application/timestamp-query`） |
+| `/tsa` | POST | RFC 3161 时间戳 |
 | `/tsa/cert` | GET | 下载 TSA 证书 (SM2) |
 | `/tsa/cacert` | GET | 下载 CA 证书 |
 | `/health` | GET | 健康检查 |
 | `/info` | GET | 服务信息 JSON |
 
-HTTPS 端口默认 `8443`（映射容器 443）。
+默认端口映射：`8080→80`，`8443→443`。
 
 ---
 
 ## Java SDK 最小用法
-
-`application.yml`:
 
 ```yaml
 tsa:
@@ -136,22 +130,9 @@ tsa:
 ```
 
 ```java
-@Autowired
-private TsaClient tsaClient;
-
-// SM3 摘要
-String hex = Sm3Util.hashHex("payload");
-
-// SM2 签名
-KeyPair kp = Sm2Util.generateKeyPair();
-byte[] sig = Sm2Util.sign(data, kp.getPrivate());
-boolean ok = Sm2Util.verify(data, sig, kp.getPublic());
-
-// 时间戳
+@Autowired TsaClient tsaClient;
 TimeStampResult r = tsaClient.timestamp("Hello, TSA!");
 ```
-
-依赖：
 
 ```xml
 <dependency>
@@ -163,101 +144,30 @@ TimeStampResult r = tsaClient.timestamp("Hello, TSA!");
 
 ---
 
-## 常用运维命令
+## GitHub Actions
 
-```powershell
-docker compose logs -f tsa-server
-docker compose logs -f nginx
-docker exec tsa-chrony chronyc tracking
-docker exec tsa-server gmssl version
-docker exec tsa-server gmssl x509 -in /etc/tsa/certs/tsacert.pem -text -noout
-docker compose down        # 停服务保留卷
-docker compose down -v     # 停服务并删除证书/序列号（会重生证书）
-```
-
----
-
-## 配置
-
-编辑 `.env`：
-
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `NGINX_HTTP_PORT` | 8080 | HTTP 映射端口 |
-| `NGINX_HTTPS_PORT` | 8443 | HTTPS 映射端口 |
-| `CA_ORG` / `TSA_CN` | MyOrg / TSA Server | 证书主题 |
-| `TSA_POLICY_OID` | 1.2.3.4.1 | 默认策略 OID |
-| `NTP_SERVER1..3` | 阿里/腾讯/pool | NTP 上游 |
-
----
-
-## 文档
-
-- [完整操作手册](docs/operation-manual.md) — 架构、证书、CGI、SDK API、生产实践、排障
-- 国密算法：SM2 (`1.2.156.10197.1.301`) / SM3 (`1.2.156.10197.1.401`)
-
-## GitHub Actions 镜像构建
-
-仓库已内置 CI/CD 工作流（`.github/workflows/`）：
-
-| Workflow | 文件 | 作用 |
-|----------|------|------|
-| **Docker Build & Push** | `docker-build.yml` | **多架构**构建 `tsa-server` / `nginx` / `chrony`（`linux/amd64` + `linux/arm64`），推送到 GHCR |
-| **Maven CI** | `maven-ci.yml` | 编译 `sdk` + `sdk-demo`，上传 jar 产物 |
-| **CI** | `ci.yml` | 路径变更检测与总览 Summary |
-
-### 触发条件
-
-- **push** 到 `main` / `master` / `develop`，或打 `v*` 标签
-- **pull_request**（仅构建校验，**不推送**镜像）
-- **workflow_dispatch** 手动触发（可选手动推送、按组件过滤）
-
-### 多架构说明
-
-| 架构 | Runner | 说明 |
-|------|--------|------|
-| `linux/amd64` (x86_64) | `ubuntu-latest` | Intel / AMD 服务器、大多数云主机 |
-| `linux/arm64` (aarch64) | `ubuntu-24.04-arm` | Apple Silicon、ARM 云主机、树莓派 64 位等 |
-
-各架构在**原生 runner** 上编译后合并为 multi-arch manifest；`docker pull` 会自动选择本机架构。  
-不使用 QEMU 交叉编译，避免 `tsa-server` 编译 GmSSL3 时过慢或超时。
-
-### 镜像地址约定
-
-```text
-ghcr.io/<owner>/<repo>/tsa-server:<tag>
-ghcr.io/<owner>/<repo>/nginx:<tag>
-ghcr.io/<owner>/<repo>/chrony:<tag>
-```
-
-标签示例：`latest`（默认分支）、分支名、`sha-xxxxxxx`、`v1.0.0` → `1.0.0`。
-
-检查镜像是否包含双架构：
+| Workflow | 说明 |
+|----------|------|
+| **Docker Build & Push** | 构建 **1 个** multi-arch 镜像 `.../tsa`（amd64 + arm64） |
+| **Maven CI** | 编译 SDK / Demo |
 
 ```bash
-docker buildx imagetools inspect ghcr.io/xiaochen201807/shijianchuo/tsa-server:latest
+docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest
+docker buildx imagetools inspect ghcr.io/xiaochen201807/shijianchuo/tsa:latest
 ```
 
-### 使用预构建镜像部署
+---
+
+## 运维命令
 
 ```powershell
-# 登录 GHCR（Package 为 private 时需要）
-echo $env:GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
-
-$env:GHCR_OWNER = "your-org"      # 小写
-$env:GHCR_REPO  = "shijianchuo"   # 小写
-$env:IMAGE_TAG  = "latest"
-
-docker compose -f docker-compose.ghcr.yml pull
-docker compose -f docker-compose.ghcr.yml up -d
+docker compose logs -f tsa
+docker exec tsa gmssl version
+docker exec tsa supervisorctl status
+docker exec tsa chronyc tracking
+docker compose down
+docker compose down -v   # 删除证书与数据卷
 ```
-
-### 首次使用注意
-
-1. 推送代码后在 GitHub **Actions** 页查看运行状态（`tsa-server` 因编译 GmSSL3，首次约 10–20 分钟）。
-2. 仓库 **Settings → Actions → General** 确保允许 workflow 读写。
-3. 推送成功后到 **Packages** 查看镜像；若需公开拉取，将 Package 可见性设为 **Public**。
-4. 无需额外 Secret：使用内置 `GITHUB_TOKEN` 推送 `ghcr.io`。
 
 ---
 
