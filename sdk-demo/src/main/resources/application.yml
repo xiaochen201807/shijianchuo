@@ -12,20 +12,14 @@ spring:
     name: tsa-demo
 
 # TSA SDK 配置
+# 环境变量覆盖示例: TSA_URL=http://192.168.1.10:8080/tsa
 tsa:
-  # TSA 服务器 URL (Docker Compose 中 nginx 的地址)
-  url: http://localhost:8080/tsa
-  # 连接超时 (毫秒)
-  connect-timeout: 5000
-  # 读取超时 (毫秒)
-  read-timeout: 30000
-  # TSA 策略 OID
-  policy-oid: 1.2.3.4.1
-  # 是否在响应中请求 TSA 证书
+  url: ${TSA_URL:http://localhost:8080/tsa}
+  connect-timeout: ${TSA_CONNECT_TIMEOUT:5000}
+  read-timeout: ${TSA_READ_TIMEOUT:30000}
+  policy-oid: ${TSA_POLICY_OID:1.2.3.4.1}
   cert-req: true
-  # 摘要算法 (SM3 国密)
   hash-algorithm: SM3
-  # 自动注册 BouncyCastle Provider
   auto-register-provider: true
 
 # 日志配置

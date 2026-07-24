@@ -1,5 +1,6 @@
 package com.tsa.starter;
 
+import com.tsa.starter.aot.TsaRuntimeHints;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -8,6 +9,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.ImportRuntimeHints;
 
 import java.security.Security;
 
@@ -34,6 +36,7 @@ import java.security.Security;
 @EnableConfigurationProperties(TsaProperties.class)
 @ConditionalOnClass(TsaClient.class)
 @ConditionalOnProperty(prefix = "tsa", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ImportRuntimeHints(TsaRuntimeHints.class)
 public class TsaAutoConfiguration {
 
     private static final Logger logger = LoggerFactory.getLogger(TsaAutoConfiguration.class);

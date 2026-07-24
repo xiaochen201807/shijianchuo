@@ -79,16 +79,26 @@ ghcr.io/xiaochen201807/shijianchuo/tsa:latest
 
 多架构：`linux/amd64` + `linux/arm64`，`docker pull` 自动选择。
 
-### 4. 编译 SDK 并启动 Demo
+### 4. 编译 / 运行 Demo（推荐原生二进制，无 JVM）
+
+| 方式 | 命令 | 是否需要 JVM |
+|------|------|----------------|
+| **原生二进制（推荐）** | `bash scripts/build-native.sh` 或 Docker | **否** |
+| 开发调试 jar | `mvn -pl sdk-demo -am spring-boot:run` | 是 |
 
 ```powershell
-mvn clean install -DskipTests
-cd sdk-demo
-mvn spring-boot:run
+# 方式 A: Docker 构建并运行原生 Demo（镜像内无 JRE）
+docker compose -f docker-compose.demo.yml up --build -d
+curl "http://localhost:9090/api/sm3/hash?text=Hello"
+
+# 方式 B: 本机 GraalVM 出二进制
+# bash ./scripts/build-native.sh
+# ./sdk-demo/target/tsa-demo
 ```
 
-- Demo：`http://localhost:9090`
-- TSA：`http://localhost:8080/tsa`
+- 说明文档：[`docs/native-binary.md`](docs/native-binary.md)
+- Demo：`http://localhost:9090` · TSA：`http://localhost:8080/tsa`
+- **SDK 库**仍为 jar（给其它 Java 项目依赖）；**可执行程序**为 `tsa-demo` 原生文件
 
 ---
 
@@ -152,8 +162,9 @@ TimeStampResult r = tsaClient.timestamp("Hello, TSA!");
 
 | Workflow | 说明 |
 |----------|------|
-| **Docker Build & Push** | 构建 **1 个** multi-arch 镜像 `.../tsa`（amd64 + arm64） |
-| **Maven CI** | 编译 SDK / Demo |
+| **Docker Build & Push** | 构建 **1 个** multi-arch 服务镜像 `.../tsa`（amd64 + arm64，无 JVM） |
+| **Native Binary CI** | 构建 `tsa-demo` **原生二进制** + 无 JVM 镜像 `.../tsa-demo` |
+| **Maven CI** | 编译 SDK **库 jar**（供依赖，不是运行时镜像） |
 
 ```bash
 docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest

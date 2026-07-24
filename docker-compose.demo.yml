@@ -1,0 +1,27 @@
+# ============================================================
+# tsa-demo 原生二进制 (无 JVM)
+#
+# 依赖本机已有 TSA 服务 (默认 localhost:8080)
+#
+#   docker compose -f docker-compose.demo.yml up --build -d
+#   curl http://localhost:9090/api/sm3/hash?text=Hello
+# ============================================================
+
+services:
+  tsa-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    image: tsa-demo:native
+    container_name: tsa-demo
+    restart: unless-stopped
+    ports:
+      - "${DEMO_PORT:-9090}:9090"
+    environment:
+      - TZ=Asia/Shanghai
+      - SERVER_PORT=9090
+      # Spring relaxed binding: tsa.url
+      - TSA_URL=${TSA_URL:-http://host.docker.internal:8080/tsa}
+      - LOGGING_LEVEL_COM_TSA=INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

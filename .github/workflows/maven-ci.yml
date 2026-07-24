@@ -1,5 +1,6 @@
 # ============================================================
-# Java SDK / Demo 编译 CI
+# Java SDK 库编译 (仍为 jar，供其它 Java 项目依赖)
+# Demo 原生二进制见 native-ci.yml
 # ============================================================
 name: Maven CI
 
@@ -26,7 +27,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build SDK & Demo (JDK ${{ matrix.java }})
+    name: Build SDK library (JDK ${{ matrix.java }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -43,31 +44,14 @@ jobs:
           java-version: ${{ matrix.java }}
           cache: maven
 
-      - name: Show versions
-        run: |
-          java -version
-          mvn -version
-
-      - name: Maven clean install
+      - name: Maven install (SDK jar + demo jar 校验编译)
         run: mvn -B -f pom.xml clean install -DskipTests
 
-      - name: Maven test (if any)
-        run: mvn -B -f pom.xml test
-        continue-on-error: false
-
-      - name: Upload starter artifact
+      - name: Upload starter jar (library only)
         uses: actions/upload-artifact@v4
         with:
           name: tsa-spring-boot-starter-jdk${{ matrix.java }}
           path: sdk/target/tsa-spring-boot-starter-*.jar
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload demo artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tsa-demo-jdk${{ matrix.java }}
-          path: sdk-demo/target/tsa-demo-*.jar
           if-no-files-found: error
           retention-days: 14
 
@@ -76,7 +60,7 @@ jobs:
           {
             echo "## Maven CI"
             echo ""
-            echo "- JDK: ${{ matrix.java }}"
-            echo "- Modules: sdk, sdk-demo"
-            echo "- Artifacts uploaded: starter jar + demo jar"
+            echo "- **SDK** (\`tsa-spring-boot-starter\`): 仍为 **JAR 库**，供其它 Java/Spring 项目依赖"
+            echo "- **Demo 可执行程序**: 请使用 **Native Binary CI** 产出无 JVM 二进制 / 镜像"
+            echo "- 构建命令: \`mvn -Pnative -DskipTests package\` → \`sdk-demo/target/tsa-demo\`"
           } >> "$GITHUB_STEP_SUMMARY"

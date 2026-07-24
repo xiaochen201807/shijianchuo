@@ -4,19 +4,16 @@
 .mvn
 **/target
 **/*.iml
-sdk
-sdk-demo
 docs
-scripts
 *.md
 .env
-.env.*
-!.env.example
+.env.local
 docker-compose*.yml
-# 旧分体镜像目录中的 Dockerfile（构建 all-in-one 不需要）
+# 旧分体镜像
 nginx
 chrony
-# 保留 tsa-server 的 config/scripts，忽略其独立 Dockerfile
 tsa-server/Dockerfile
 tsa-server/scripts/entrypoint.sh
 tsa-server/scripts/healthcheck.sh
+# all-in-one 构建不需要 Java 源码；demo 原生镜像需要 sdk/sdk-demo
+# （Dockerfile.demo 使用根 context，会复制 sdk + sdk-demo）

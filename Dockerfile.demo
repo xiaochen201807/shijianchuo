@@ -1,0 +1,62 @@
+# ============================================================
+# tsa-demo 原生二进制镜像 — 无 JVM
+#
+# 构建:
+#   docker build -f Dockerfile.demo -t tsa-demo:native .
+#
+# 运行 (无 JDK):
+#   docker run --rm -p 9090:9090 \
+#     -e TSA_URL=http://host.docker.internal:8080/tsa \
+#     tsa-demo:native
+# ============================================================
+
+# ---------- 阶段 1: GraalVM 编译原生可执行文件 ----------
+FROM ghcr.io/graalvm/native-image-community:21-ol9 AS build
+
+WORKDIR /src
+
+# 安装 Maven
+RUN microdnf install -y maven-openjdk21 gzip tar && microdnf clean all || \
+    (curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
+      | tar -xz -C /opt && ln -sf /opt/apache-maven-3.9.9/bin/mvn /usr/local/bin/mvn)
+
+ENV MAVEN_OPTS="-Xmx4g"
+
+COPY pom.xml ./
+COPY sdk ./sdk
+COPY sdk-demo ./sdk-demo
+
+# 先装 SDK，再 native 编译 demo
+RUN mvn -B -f pom.xml -pl sdk -am clean install -DskipTests \
+    && mvn -B -f pom.xml -pl sdk-demo -am -Pnative -DskipTests package \
+    && ls -lh sdk-demo/target/tsa-demo \
+    && file sdk-demo/target/tsa-demo || true
+
+# ---------- 阶段 2: 极简运行时（无 JRE/JVM）----------
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 10001 -s /usr/sbin/nologin app
+
+WORKDIR /app
+
+COPY --from=build /src/sdk-demo/target/tsa-demo /app/tsa-demo
+COPY sdk-demo/src/main/resources/application.yml /app/config/application.yml
+
+RUN chmod +x /app/tsa-demo && chown -R app:app /app
+
+USER app
+
+ENV SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/app/config/ \
+    SERVER_PORT=9090 \
+    TSA_URL=http://host.docker.internal:8080/tsa
+
+EXPOSE 9090
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -sf "http://127.0.0.1:${SERVER_PORT}/api/sm3/hash?text=ping" >/dev/null || exit 1
+
+# 原生二进制直接启动，进程内无 JVM
+ENTRYPOINT ["/app/tsa-demo"]
