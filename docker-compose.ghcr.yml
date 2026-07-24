@@ -16,6 +16,8 @@
 #   ghcr.io/<owner>/<repo>/tsa-server:<tag>
 #   ghcr.io/<owner>/<repo>/nginx:<tag>
 #   ghcr.io/<owner>/<repo>/chrony:<tag>
+#
+# 镜像为 multi-arch (linux/amd64 + linux/arm64)，docker pull 会按本机架构自动选择。
 # ============================================================
 
 services:

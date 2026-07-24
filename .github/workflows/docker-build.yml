@@ -1,6 +1,9 @@
 # ============================================================
-# Docker 镜像构建 & 推送
+# Docker 多架构镜像构建 & 推送 (linux/amd64 + linux/arm64)
 # 组件: tsa-server (GmSSL3 + fcgiwrap) / nginx / chrony
+# 策略: 各架构使用原生 runner 编译，再合并 multi-arch manifest
+#   - amd64 → ubuntu-latest
+#   - arm64 → ubuntu-24.04-arm  (避免 QEMU 下编译 GmSSL 过慢/超时)
 # 仓库: ghcr.io/<owner>/<repo>/<image>
 # ============================================================
 name: Docker Build & Push
@@ -50,18 +53,17 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # GHCR 要求镜像名全小写
-  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 jobs:
   # ------------------------------------------------------------
-  # 准备镜像矩阵与是否推送
+  # 准备: 镜像列表 × 架构矩阵、是否推送、镜像前缀
   # ------------------------------------------------------------
   prepare:
     name: Prepare
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      images: ${{ steps.set-matrix.outputs.images }}
       push: ${{ steps.meta.outputs.push }}
       image_prefix: ${{ steps.meta.outputs.image_prefix }}
     steps:
@@ -73,59 +75,79 @@ jobs:
           PREFIX="ghcr.io/${OWNER}/${REPO}"
           echo "image_prefix=${PREFIX}" >> "$GITHUB_OUTPUT"
 
-          # PR 默认不推送；手动触发可覆盖；push/tag 推送
           PUSH="false"
-          if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              if [ "${{ inputs.push_images }}" = "true" ]; then
-                PUSH="true"
-              fi
-            else
-              PUSH="true"
-            fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            PUSH="true"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.push_images }}" = "true" ]; then
+            PUSH="true"
           fi
           echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
           echo "Image prefix: ${PREFIX}"
           echo "Push images:  ${PUSH}"
+          echo "Platforms:    linux/amd64, linux/arm64"
 
-      - name: Build matrix JSON
+      - name: Build matrix JSON (image × platform)
         id: set-matrix
         run: |
           FILTER="${{ inputs.image_filter || 'all' }}"
-          # pull_request 没有 inputs，默认为 all
           if [ -z "$FILTER" ] || [ "$FILTER" = "null" ]; then
             FILTER="all"
           fi
 
-          ALL='[
-            {"name":"tsa-server","context":"./tsa-server","dockerfile":"./tsa-server/Dockerfile","timeout":90},
+          # timeout: tsa-server 编译 GmSSL 较久；原生 arm runner 通常足够
+          IMAGES='[
+            {"name":"tsa-server","context":"./tsa-server","dockerfile":"./tsa-server/Dockerfile","timeout":120},
             {"name":"nginx","context":"./nginx","dockerfile":"./nginx/Dockerfile","timeout":30},
             {"name":"chrony","context":"./chrony","dockerfile":"./chrony/Dockerfile","timeout":20}
           ]'
 
-          if [ "$FILTER" = "all" ]; then
-            MATRIX="$ALL"
-          else
-            MATRIX=$(echo "$ALL" | jq -c --arg n "$FILTER" '[.[] | select(.name == $n)]')
-            COUNT=$(echo "$MATRIX" | jq 'length')
+          if [ "$FILTER" != "all" ]; then
+            IMAGES=$(echo "$IMAGES" | jq -c --arg n "$FILTER" '[.[] | select(.name == $n)]')
+            COUNT=$(echo "$IMAGES" | jq 'length')
             if [ "$COUNT" -eq 0 ]; then
               echo "Unknown image_filter: $FILTER" >&2
               exit 1
             fi
           fi
 
-          # GitHub matrix 需要 { "include": [...] }
-          OUTPUT=$(jq -c -n --argjson include "$MATRIX" '{include: $include}')
-          echo "matrix=${OUTPUT}" >> "$GITHUB_OUTPUT"
-          echo "Matrix: ${OUTPUT}"
+          # 架构: x86_64 + ARM64，绑定原生 runner（不用 QEMU 交叉编译）
+          PLATFORMS='[
+            {"platform":"linux/amd64","runner":"ubuntu-latest"},
+            {"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}
+          ]'
+
+          # 笛卡尔积: image × platform
+          MATRIX=$(jq -c -n \
+            --argjson images "$IMAGES" \
+            --argjson platforms "$PLATFORMS" \
+            '
+            [ $images[] as $img | $platforms[] as $p |
+              {
+                name: $img.name,
+                context: $img.context,
+                dockerfile: $img.dockerfile,
+                timeout: $img.timeout,
+                platform: $p.platform,
+                runner: $p.runner
+              }
+            ] | {include: .}
+            ')
+
+          # merge job 需要镜像名列表
+          IMAGE_NAMES=$(echo "$IMAGES" | jq -c '[.[].name]')
+
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "images=${IMAGE_NAMES}" >> "$GITHUB_OUTPUT"
+          echo "Matrix: ${MATRIX}"
+          echo "Images: ${IMAGE_NAMES}"
 
   # ------------------------------------------------------------
-  # 并行构建 / 推送各组件镜像
+  # 按架构原生构建，按 digest 推送（不直接打 latest 等 tag）
   # ------------------------------------------------------------
   build:
-    name: Build ${{ matrix.name }}
+    name: ${{ matrix.name }} (${{ matrix.platform }})
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ fromJSON(matrix.timeout) }}
     permissions:
       contents: read
@@ -137,8 +159,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Prepare platform suffix (for artifact name)
+        id: prep
+        run: |
+          # linux/amd64 -> amd64, linux/arm64 -> arm64
+          PLATFORM_PAIR="${{ matrix.platform }}"
+          PLATFORM_PAIR="${PLATFORM_PAIR//\//-}"
+          echo "platform_pair=${PLATFORM_PAIR}" >> "$GITHUB_OUTPUT"
+          echo "Building ${{ matrix.name }} for ${{ matrix.platform }} on ${{ matrix.runner }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -151,82 +179,212 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
+      - name: Docker meta (labels only; tags applied in merge)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ needs.prepare.outputs.image_prefix }}/${{ matrix.name }}
-          tags: |
-            # 默认分支 -> latest
-            type=raw,value=latest,enable={{is_default_branch}}
-            # 分支名
-            type=ref,event=branch
-            # PR
-            type=ref,event=pr
-            # semver: v1.2.3 -> 1.2.3 / 1.2 / 1
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            # 短 SHA
-            type=sha,prefix=sha-,format=short
-            # 手动触发时额外打 build 标签
-            type=raw,value=build-${{ github.run_number }},enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.name }}
+            org.opencontainers.image.description=RFC 3161 GM TSA component (${{ matrix.name }})
+            org.opencontainers.image.platform=${{ matrix.platform }}
 
-      - name: Build and push
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          # 单架构优先保证稳定性；如需多架构可改为 linux/amd64,linux/arm64
-          platforms: linux/amd64
-          push: ${{ needs.prepare.outputs.push == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GHA 缓存加速（尤其 tsa-server 编译 GmSSL3）
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # 推送时只按 digest，合并阶段再打 multi-arch tag
+          # PR 不推送，仅验证能否在该架构构建成功
+          outputs: ${{ needs.prepare.outputs.push == 'true' && format('type=image,name={0}/{1},push-by-digest=true,name-canonical=true,push=true', needs.prepare.outputs.image_prefix, matrix.name) || 'type=cacheonly' }}
+          # 按镜像+架构分 scope，缓存互不污染
+          cache-from: type=gha,scope=${{ matrix.name }}-${{ steps.prep.outputs.platform_pair }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ steps.prep.outputs.platform_pair }}
           provenance: false
           sbom: false
 
-      - name: Image digest
+      - name: Export digest
         if: needs.prepare.outputs.push == 'true'
         run: |
-          echo "### ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p /tmp/digests
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "ERROR: empty digest from build" >&2
+            exit 1
+          fi
+          # 文件名 = digest 去掉 sha256: 前缀
+          touch "/tmp/digests/${DIGEST#sha256:}"
+          echo "Exported digest: ${DIGEST}"
+          ls -la /tmp/digests
+
+      - name: Upload digest artifact
+        if: needs.prepare.outputs.push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.name }}-${{ steps.prep.outputs.platform_pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Build-only note (PR / no push)
+        if: needs.prepare.outputs.push != 'true'
+        run: |
+          echo "### ${{ matrix.name }} @ ${{ matrix.platform }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Image**: \`${{ needs.prepare.outputs.image_prefix }}/${{ matrix.name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Digest**: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Tags**:" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "- Runner: \`${{ matrix.runner }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Mode: **build only** (not pushed)" >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------
+  # 合并 amd64 + arm64 digest → multi-arch manifest + 业务 tags
+  # ------------------------------------------------------------
+  merge:
+    name: Merge multi-arch ${{ matrix.name }}
+    needs: [prepare, build]
+    if: needs.prepare.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ${{ fromJSON(needs.prepare.outputs.images) }}
+    steps:
+      - name: Download digests for ${{ matrix.name }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.name }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: List digests
+        run: |
+          echo "Digests for ${{ matrix.name }}:"
+          ls -la /tmp/digests
+          # 至少应有 2 个架构 digest
+          COUNT=$(find /tmp/digests -type f | wc -l)
+          echo "Digest count: ${COUNT}"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: no digests found" >&2
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract tags / labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ needs.prepare.outputs.image_prefix }}/${{ matrix.name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=build-${{ github.run_number }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Create multi-arch manifest and push tags
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          IMAGE="${{ needs.prepare.outputs.image_prefix }}/${{ matrix.name }}"
+
+          # 所有架构 digest 引用
+          DIGEST_REFS=()
+          for f in *; do
+            [ -f "$f" ] || continue
+            DIGEST_REFS+=("${IMAGE}@sha256:${f}")
+          done
+
+          echo "Creating multi-arch image from:"
+          printf '  %s\n' "${DIGEST_REFS[@]}"
+
+          # metadata-action 输出的 tags 可能多行
+          TAG_ARGS=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            TAG_ARGS+=("-t" "${tag}")
+          done <<< "${{ steps.meta.outputs.tags }}"
+
+          if [ ${#TAG_ARGS[@]} -eq 0 ]; then
+            echo "ERROR: no tags generated" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create \
+            "${TAG_ARGS[@]}" \
+            "${DIGEST_REFS[@]}"
+
+          echo "Multi-arch manifest created for ${IMAGE}"
+
+      - name: Inspect multi-arch image
+        run: |
+          IMAGE="${{ needs.prepare.outputs.image_prefix }}/${{ matrix.name }}"
+          # 优先用 latest / 第一个 tag 检查
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          echo "Inspect: ${FIRST_TAG}"
+          docker buildx imagetools inspect "${FIRST_TAG}" || \
+            docker buildx imagetools inspect "${IMAGE}:latest" || true
+
+          {
+            echo "### ${{ matrix.name }} (multi-arch)"
+            echo ""
+            echo "- **Image**: \`${IMAGE}\`"
+            echo "- **Platforms**: \`linux/amd64\`, \`linux/arm64\`"
+            echo "- **Tags**:"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ------------------------------------------------------------
   # 汇总
   # ------------------------------------------------------------
   summary:
     name: Summary
-    needs: [prepare, build]
+    needs: [prepare, build, merge]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Write summary
         run: |
           {
-            echo "## Docker Build Summary"
+            echo "## Docker Multi-Arch Build Summary"
             echo ""
             echo "| Item | Value |"
             echo "|------|-------|"
             echo "| Event | \`${{ github.event_name }}\` |"
             echo "| Ref | \`${{ github.ref }}\` |"
+            echo "| Platforms | \`linux/amd64\`, \`linux/arm64\` |"
+            echo "| Runners | \`ubuntu-latest\` (x86), \`ubuntu-24.04-arm\` (ARM) |"
             echo "| Push to GHCR | \`${{ needs.prepare.outputs.push }}\` |"
             echo "| Image prefix | \`${{ needs.prepare.outputs.image_prefix }}\` |"
-            echo "| Build result | \`${{ needs.build.result }}\` |"
+            echo "| Build | \`${{ needs.build.result }}\` |"
+            echo "| Merge | \`${{ needs.merge.result }}\` |"
             echo ""
-            echo "### Pull examples"
+            echo "### Pull (自动选架构)"
             echo '```bash'
             echo "docker pull ${{ needs.prepare.outputs.image_prefix }}/tsa-server:latest"
             echo "docker pull ${{ needs.prepare.outputs.image_prefix }}/nginx:latest"
             echo "docker pull ${{ needs.prepare.outputs.image_prefix }}/chrony:latest"
+            echo '```'
+            echo ""
+            echo "### 检查支持的架构"
+            echo '```bash'
+            echo "docker buildx imagetools inspect ${{ needs.prepare.outputs.image_prefix }}/tsa-server:latest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

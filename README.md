@@ -202,7 +202,7 @@ docker compose down -v     # 停服务并删除证书/序列号（会重生证�
 
 | Workflow | 文件 | 作用 |
 |----------|------|------|
-| **Docker Build & Push** | `docker-build.yml` | 并行构建 `tsa-server` / `nginx` / `chrony`，推送到 GHCR |
+| **Docker Build & Push** | `docker-build.yml` | **多架构**构建 `tsa-server` / `nginx` / `chrony`（`linux/amd64` + `linux/arm64`），推送到 GHCR |
 | **Maven CI** | `maven-ci.yml` | 编译 `sdk` + `sdk-demo`，上传 jar 产物 |
 | **CI** | `ci.yml` | 路径变更检测与总览 Summary |
 
@@ -211,6 +211,16 @@ docker compose down -v     # 停服务并删除证书/序列号（会重生证�
 - **push** 到 `main` / `master` / `develop`，或打 `v*` 标签
 - **pull_request**（仅构建校验，**不推送**镜像）
 - **workflow_dispatch** 手动触发（可选手动推送、按组件过滤）
+
+### 多架构说明
+
+| 架构 | Runner | 说明 |
+|------|--------|------|
+| `linux/amd64` (x86_64) | `ubuntu-latest` | Intel / AMD 服务器、大多数云主机 |
+| `linux/arm64` (aarch64) | `ubuntu-24.04-arm` | Apple Silicon、ARM 云主机、树莓派 64 位等 |
+
+各架构在**原生 runner** 上编译后合并为 multi-arch manifest；`docker pull` 会自动选择本机架构。  
+不使用 QEMU 交叉编译，避免 `tsa-server` 编译 GmSSL3 时过慢或超时。
 
 ### 镜像地址约定
 
@@ -221,6 +231,12 @@ ghcr.io/<owner>/<repo>/chrony:<tag>
 ```
 
 标签示例：`latest`（默认分支）、分支名、`sha-xxxxxxx`、`v1.0.0` → `1.0.0`。
+
+检查镜像是否包含双架构：
+
+```bash
+docker buildx imagetools inspect ghcr.io/xiaochen201807/shijianchuo/tsa-server:latest
+```
 
 ### 使用预构建镜像部署
 

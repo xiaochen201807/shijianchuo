@@ -1342,9 +1342,9 @@ pwsh ./scripts/test_tsa.ps1
 
 | 事件 | 是否构建 | 是否推送 GHCR |
 |------|----------|---------------|
-| `pull_request` | 是 | 否 |
-| `push` 到 main/master/develop | 是（路径过滤） | 是 |
-| `push` 标签 `v*` | 是 | 是 |
+| `pull_request` | 是（双架构校验） | 否 |
+| `push` 到 main/master/develop | 是（路径过滤） | 是（multi-arch） |
+| `push` 标签 `v*` | 是 | 是（multi-arch） |
 | `workflow_dispatch` | 是 | 可选（默认 true） |
 
 **镜像名**（全小写）：
@@ -1355,10 +1355,27 @@ ghcr.io/<owner>/<repo>/nginx
 ghcr.io/<owner>/<repo>/chrony
 ```
 
+**多架构 (amd64 + arm64)**：
+
+| 平台 | Runner | 用途 |
+|------|--------|------|
+| `linux/amd64` | `ubuntu-latest` | x86_64 服务器 |
+| `linux/arm64` | `ubuntu-24.04-arm` | ARM64 / Apple Silicon 等 |
+
+构建流程：各架构**原生编译** → 按 digest 推送 → `docker buildx imagetools create` 合并 multi-arch manifest 并打业务标签。  
+不使用 QEMU 模拟交叉编译（GmSSL 源码编译在 QEMU 下极易超时）。
+
 **常用标签**：`latest`、分支名、`sha-<short>`、语义化版本（由 `v1.2.3` 标签生成）。
 
-**缓存**：使用 Buildx `type=gha` 缓存，加速 `tsa-server`（GmSSL3 编译）。  
-**超时**：`tsa-server` 90 分钟，`nginx` 30 分钟，`chrony` 20 分钟。
+**缓存**：Buildx `type=gha`，按 `镜像名-架构` 分 scope。  
+**超时**：`tsa-server` 120 分钟，`nginx` 30 分钟，`chrony` 20 分钟。
+
+**检查架构**：
+
+```bash
+docker buildx imagetools inspect ghcr.io/<owner>/<repo>/tsa-server:latest
+# 应看到 Platform: linux/amd64 与 linux/arm64
+```
 
 ### 17.3 手动触发
 
