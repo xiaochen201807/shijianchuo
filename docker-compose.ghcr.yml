@@ -1,0 +1,118 @@
+# ============================================================
+# 使用 GHCR 预构建镜像（跳过本地编译 GmSSL3）
+#
+# 用法:
+#   export GHCR_OWNER=your-github-user-or-org   # 必须小写
+#   export GHCR_REPO=shijianchuo                # 必须小写
+#   export IMAGE_TAG=latest
+#
+#   # 若仓库/Package 为私有:
+#   echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+#
+#   docker compose -f docker-compose.ghcr.yml pull
+#   docker compose -f docker-compose.ghcr.yml up -d
+#
+# 镜像命名 (与 .github/workflows/docker-build.yml 一致):
+#   ghcr.io/<owner>/<repo>/tsa-server:<tag>
+#   ghcr.io/<owner>/<repo>/nginx:<tag>
+#   ghcr.io/<owner>/<repo>/chrony:<tag>
+# ============================================================
+
+services:
+  chrony:
+    image: ghcr.io/${GHCR_OWNER:-your-org}/${GHCR_REPO:-shijianchuo}/chrony:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: tsa-chrony
+    restart: always
+    privileged: true
+    cap_add:
+      - SYS_TIME
+    networks:
+      tsa-net:
+        aliases:
+          - chrony
+    volumes:
+      - chrony-data:/var/lib/chrony
+    healthcheck:
+      test: ["CMD", "chronyc", "tracking"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  tsa-server:
+    image: ghcr.io/${GHCR_OWNER:-your-org}/${GHCR_REPO:-shijianchuo}/tsa-server:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: tsa-server
+    restart: always
+    depends_on:
+      chrony:
+        condition: service_healthy
+    networks:
+      tsa-net:
+        aliases:
+          - tsa
+    volumes:
+      - tsa-certs:/etc/tsa/certs
+      - tsa-serial:/var/lib/tsa
+      - tsa-logs:/var/log/tsa
+    environment:
+      - TZ=Asia/Shanghai
+      - TSA_POLICY_OID=${TSA_POLICY_OID:-1.2.3.4.1}
+      - CA_COUNTRY=${CA_COUNTRY:-CN}
+      - CA_STATE=${CA_STATE:-Beijing}
+      - CA_LOCALITY=${CA_LOCALITY:-Beijing}
+      - CA_ORG=${CA_ORG:-MyOrg}
+      - CA_OU=${CA_OU:-TSA}
+      - CA_CN=${CA_CN:-TSA Root CA}
+      - TSA_CN=${TSA_CN:-TSA Server}
+      - CERT_DAYS=${CERT_DAYS:-3650}
+    healthcheck:
+      test: ["CMD", "test", "-f", "/etc/tsa/certs/tsacert.pem"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  nginx:
+    image: ghcr.io/${GHCR_OWNER:-your-org}/${GHCR_REPO:-shijianchuo}/nginx:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: tsa-nginx
+    restart: always
+    depends_on:
+      tsa-server:
+        condition: service_healthy
+    ports:
+      - "${NGINX_HTTP_PORT:-8080}:80"
+      - "${NGINX_HTTPS_PORT:-8443}:443"
+    networks:
+      tsa-net:
+        aliases:
+          - nginx
+    volumes:
+      - tsa-certs:/etc/nginx/tsa-certs:ro
+      - nginx-tls:/etc/nginx/tls
+      - nginx-logs:/var/log/nginx
+    environment:
+      - TZ=Asia/Shanghai
+
+volumes:
+  tsa-certs:
+    driver: local
+  tsa-serial:
+    driver: local
+  tsa-logs:
+    driver: local
+  nginx-tls:
+    driver: local
+  nginx-logs:
+    driver: local
+  chrony-data:
+    driver: local
+
+networks:
+  tsa-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

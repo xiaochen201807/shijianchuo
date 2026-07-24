@@ -1,0 +1,68 @@
+# ============================================================
+# 总 CI 入口：路径过滤后调度 Docker + Maven
+# 手动全量跑、或 push 到主分支时总览状态
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+# 本 workflow 仅作「总览触发」；实际构建在各子 workflow 中。
+# 若希望一个 PR 内强制串行跑完，可在此调用 reusable workflow。
+# 当前采用独立 workflow + path filter，避免无关改动浪费分钟数。
+
+jobs:
+  # 检测变更路径，决定是否需要跑子任务
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+      maven: ${{ steps.filter.outputs.maven }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            docker:
+              - 'tsa-server/**'
+              - 'nginx/**'
+              - 'chrony/**'
+              - 'docker-compose.yml'
+              - '.github/workflows/docker-build.yml'
+            maven:
+              - 'sdk/**'
+              - 'sdk-demo/**'
+              - 'pom.xml'
+              - '.github/workflows/maven-ci.yml'
+
+  # 变更检测结果写到 Summary；真正构建由 docker-build / maven-ci 按 paths 自行触发。
+  # 手动 workflow_dispatch 时提示用户去对应 workflow 执行。
+  report:
+    name: CI report
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          {
+            echo "## CI path filter"
+            echo ""
+            echo "| Area | Changed |"
+            echo "|------|---------|"
+            echo "| Docker images | \`${{ needs.changes.outputs.docker }}\` |"
+            echo "| Maven SDK | \`${{ needs.changes.outputs.maven }}\` |"
+            echo ""
+            echo "### Workflows"
+            echo "- [Docker Build & Push](../actions/workflows/docker-build.yml)"
+            echo "- [Maven CI](../actions/workflows/maven-ci.yml)"
+            echo ""
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "> 手动触发请分别运行 **Docker Build & Push** / **Maven CI**，或直接 push 代码。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

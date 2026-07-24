@@ -1,0 +1,45 @@
+# Maven
+target/
+*.jar
+*.war
+*.ear
+!.mvn/wrapper/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Env (保留 .env.example)
+.env
+.env.local
+
+# Logs
+*.log
+
+# Temp files
+*.tmp
+*.bak
+
+# Certificates (不要提交到 git)
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+
+# Test outputs
+query.tsq
+response.tsr
+*.tsq
+*.tsr

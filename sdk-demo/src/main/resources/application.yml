@@ -1,0 +1,37 @@
+# ============================================================
+# TSA Demo Application 配置
+# ============================================================
+
+server:
+  port: 9090
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: tsa-demo
+
+# TSA SDK 配置
+tsa:
+  # TSA 服务器 URL (Docker Compose 中 nginx 的地址)
+  url: http://localhost:8080/tsa
+  # 连接超时 (毫秒)
+  connect-timeout: 5000
+  # 读取超时 (毫秒)
+  read-timeout: 30000
+  # TSA 策略 OID
+  policy-oid: 1.2.3.4.1
+  # 是否在响应中请求 TSA 证书
+  cert-req: true
+  # 摘要算法 (SM3 国密)
+  hash-algorithm: SM3
+  # 自动注册 BouncyCastle Provider
+  auto-register-provider: true
+
+# 日志配置
+logging:
+  level:
+    com.tsa: DEBUG
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

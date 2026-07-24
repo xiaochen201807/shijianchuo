@@ -1,0 +1,39 @@
+# ============================================================
+# TSA 证书扩展配置
+# 用于生成符合 RFC 3161 要求的 TSA 签名证书
+# ============================================================
+
+# --- CA 根证书扩展 ---
+[v3_ca]
+basicConstraints = critical, CA:true, pathlen:1
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+
+# --- TSA 签名证书扩展 (RFC 3161 核心要求) ---
+[v3_tsa]
+# 基本约束: 非CA，叶子证书
+basicConstraints = critical, CA:false
+
+# 密钥用途: 数字签名
+keyUsage = critical, digitalSignature
+
+# 扩展密钥用途: 时间戳 (RFC 3161 必需的 EKU)
+extendedKeyUsage = critical, timeStamping
+
+# 主题密钥标识符
+subjectKeyIdentifier = hash
+
+# 颁发者密钥标识符
+authorityKeyIdentifier = keyid:always,issuer
+
+# 证书策略
+certificatePolicies = @policy_tsa
+
+[policy_tsa]
+policyIdentifier = 1.2.3.4.1
+CPS.1 = "https://tsa.myorg.com/cps"
+userNotice.1 = @notice_tsa
+
+[notice_tsa]
+explicitText = "This certificate is used for RFC 3161 Time Stamp Authority with SM2/SM3"

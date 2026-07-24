@@ -1,0 +1,82 @@
+# ============================================================
+# Java SDK / Demo 编译 CI
+# ============================================================
+name: Maven CI
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - "sdk/**"
+      - "sdk-demo/**"
+      - "pom.xml"
+      - ".github/workflows/maven-ci.yml"
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - "sdk/**"
+      - "sdk-demo/**"
+      - "pom.xml"
+      - ".github/workflows/maven-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: maven-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build SDK & Demo (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["21"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Show versions
+        run: |
+          java -version
+          mvn -version
+
+      - name: Maven clean install
+        run: mvn -B -f pom.xml clean install -DskipTests
+
+      - name: Maven test (if any)
+        run: mvn -B -f pom.xml test
+        continue-on-error: false
+
+      - name: Upload starter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsa-spring-boot-starter-jdk${{ matrix.java }}
+          path: sdk/target/tsa-spring-boot-starter-*.jar
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload demo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsa-demo-jdk${{ matrix.java }}
+          path: sdk-demo/target/tsa-demo-*.jar
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Job summary
+        run: |
+          {
+            echo "## Maven CI"
+            echo ""
+            echo "- JDK: ${{ matrix.java }}"
+            echo "- Modules: sdk, sdk-demo"
+            echo "- Artifacts uploaded: starter jar + demo jar"
+          } >> "$GITHUB_STEP_SUMMARY"
