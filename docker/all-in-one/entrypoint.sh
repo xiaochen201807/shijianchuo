@@ -6,14 +6,18 @@
 
 set -e
 
-export PATH="/usr/local/tongsuo/bin:${PATH}"
-export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export OPENSSL_BIN="${OPENSSL_BIN:-/usr/local/tongsuo/bin/openssl}"
-# 避免指向不存在的 /etc/ssl/openssl.cnf 导致 openssl 子命令失败
-if [ -f /usr/local/tongsuo/ssl/openssl.cnf ]; then
-    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
+# shellcheck source=/dev/null
+if [ -f /scripts/openssl-env.sh ]; then
+    source /scripts/openssl-env.sh
 else
-    unset OPENSSL_CONF || true
+    export PATH="/usr/local/tongsuo/bin:${PATH}"
+    export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export OPENSSL_BIN="${OPENSSL_BIN:-/usr/local/tongsuo/bin/openssl}"
+    mkdir -p /usr/local/tongsuo/ssl
+    if [ ! -s /usr/local/tongsuo/ssl/openssl.cnf ] && [ -s /etc/tsa/openssl/openssl-runtime.cnf ]; then
+        cp -f /etc/tsa/openssl/openssl-runtime.cnf /usr/local/tongsuo/ssl/openssl.cnf
+    fi
+    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
 fi
 
 echo "============================================"

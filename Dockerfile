@@ -78,6 +78,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -f /etc/nginx/sites-enabled/default
 
 # Tongsuo: SM2/SM3 + openssl ts (RFC 3161)
+# 注意: make install_sw 默认不安装 openssl.cnf，而二进制会默认读
+#       /usr/local/tongsuo/ssl/openssl.cnf —— 缺失会导致 req/x509 失败
 RUN git clone --depth 1 https://github.com/Tongsuo-Project/Tongsuo.git /tmp/Tongsuo \
     && cd /tmp/Tongsuo \
     && ./config \
@@ -88,7 +90,13 @@ RUN git clone --depth 1 https://github.com/Tongsuo-Project/Tongsuo.git /tmp/Tong
         -Wl,-rpath,/usr/local/tongsuo/lib \
     && make -j"$(nproc)" \
     && make install_sw \
+    && mkdir -p /usr/local/tongsuo/ssl \
+    && ( cp -f apps/openssl.cnf /usr/local/tongsuo/ssl/openssl.cnf \
+         || cp -f apps/openssl.cnf.dist /usr/local/tongsuo/ssl/openssl.cnf \
+         || cp -f openssl.cnf /usr/local/tongsuo/ssl/openssl.cnf \
+         || true ) \
     && echo /usr/local/tongsuo/lib > /etc/ld.so.conf.d/tongsuo.conf \
+    && ( [ -d /usr/local/tongsuo/lib64 ] && echo /usr/local/tongsuo/lib64 >> /etc/ld.so.conf.d/tongsuo.conf || true ) \
     && ldconfig \
     && rm -rf /tmp/Tongsuo \
     && /usr/local/tongsuo/bin/openssl version \
@@ -128,6 +136,16 @@ COPY docker/all-in-one/supervisord.conf /etc/supervisor/supervisord.conf
 COPY docker/all-in-one/entrypoint.sh /scripts/entrypoint.sh
 COPY docker/all-in-one/healthcheck.sh /scripts/healthcheck.sh
 COPY docker/all-in-one/generate_tls_certs.sh /scripts/generate_tls_certs.sh
+COPY docker/all-in-one/openssl-env.sh /scripts/openssl-env.sh
+# 兜底 openssl.cnf（Tongsuo 默认 openssldir；缺失则 req -x509 必挂）
+COPY docker/all-in-one/openssl.cnf /etc/tsa/openssl/openssl-runtime.cnf
+RUN chmod +x /scripts/openssl-env.sh \
+    && mkdir -p /usr/local/tongsuo/ssl \
+    && if [ ! -s /usr/local/tongsuo/ssl/openssl.cnf ]; then \
+         cp -f /etc/tsa/openssl/openssl-runtime.cnf /usr/local/tongsuo/ssl/openssl.cnf; \
+       fi \
+    && test -s /usr/local/tongsuo/ssl/openssl.cnf \
+    && echo "[OK] OPENSSL_CONF file: /usr/local/tongsuo/ssl/openssl.cnf"
 
 # ★ 从阶段 1 拷贝原生二进制 (无 JVM)
 COPY --from=native-demo /src/sdk-demo/target/tsa-demo /usr/local/bin/tsa-demo

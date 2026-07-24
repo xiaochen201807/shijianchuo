@@ -1,0 +1,26 @@
+# Minimal OpenSSL/Tongsuo config for req/x509/ts in container
+# Installed to /usr/local/tongsuo/ssl/openssl.cnf when upstream conf is missing
+
+HOME			= .
+RANDFILE		= $ENV::HOME/.rnd
+
+[ req ]
+default_bits		= 2048
+default_md		= sha256
+distinguished_name	= req_distinguished_name
+x509_extensions		= v3_req
+string_mask		= utf8only
+prompt			= no
+
+[ req_distinguished_name ]
+C  = CN
+ST = Beijing
+L  = Beijing
+O  = MyOrg
+OU = TSA
+CN = tsa
+
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectKeyIdentifier = hash

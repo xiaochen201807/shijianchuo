@@ -26,11 +26,16 @@ else
     OPENSSL_BIN="$(command -v openssl)"
 fi
 
-export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-if [ -f /usr/local/tongsuo/ssl/openssl.cnf ]; then
-    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
+if [ -f /scripts/openssl-env.sh ]; then
+    # shellcheck source=/dev/null
+    source /scripts/openssl-env.sh
 else
-    unset OPENSSL_CONF || true
+    export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    mkdir -p /usr/local/tongsuo/ssl
+    if [ ! -s /usr/local/tongsuo/ssl/openssl.cnf ] && [ -s /etc/tsa/openssl/openssl-runtime.cnf ]; then
+        cp -f /etc/tsa/openssl/openssl-runtime.cnf /usr/local/tongsuo/ssl/openssl.cnf
+    fi
+    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
 fi
 
 CA_COUNTRY="${CA_COUNTRY:-CN}"

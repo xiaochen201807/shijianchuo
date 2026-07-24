@@ -7,43 +7,38 @@ set -euo pipefail
 
 TLS_CERT_DIR="/etc/nginx/tls"
 
-# --- 定位 Tongsuo openssl ---
-if [ -n "${OPENSSL_BIN:-}" ] && [ -x "${OPENSSL_BIN}" ]; then
-    :
-elif [ -x /usr/local/tongsuo/bin/openssl ]; then
-    OPENSSL_BIN=/usr/local/tongsuo/bin/openssl
-elif command -v openssl >/dev/null 2>&1; then
-    OPENSSL_BIN="$(command -v openssl)"
+# 加载 Tongsuo 环境 + 确保 openssl.cnf 存在
+if [ -f /scripts/openssl-env.sh ]; then
+    # shellcheck source=/dev/null
+    source /scripts/openssl-env.sh
 else
-    echo "[ERROR] 未找到 openssl"
-    echo "[ERROR] PATH=${PATH}"
-    ls -la /usr/local/tongsuo/bin/ 2>/dev/null || true
-    exit 1
+    export PATH="/usr/local/tongsuo/bin:${PATH}"
+    export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export OPENSSL_BIN="${OPENSSL_BIN:-/usr/local/tongsuo/bin/openssl}"
+    mkdir -p /usr/local/tongsuo/ssl
+    if [ ! -s /usr/local/tongsuo/ssl/openssl.cnf ] && [ -s /etc/tsa/openssl/openssl-runtime.cnf ]; then
+        cp -f /etc/tsa/openssl/openssl-runtime.cnf /usr/local/tongsuo/ssl/openssl.cnf
+    fi
+    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
 fi
 
-export PATH="$(dirname "${OPENSSL_BIN}"):${PATH}"
-export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-# 关键: 镜像未装系统 openssl 时，默认 OPENSSL_CONF 可能指向不存在的
-# /etc/ssl/openssl.cnf，导致 genrsa/req 直接失败（旧脚本 2>/dev/null 会静默 exit 1）
-if [ -f /usr/local/tongsuo/ssl/openssl.cnf ]; then
-    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
-elif [ -f /usr/local/tongsuo/ssl/openssl.cnf.dist ]; then
-    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf.dist
-else
-    unset OPENSSL_CONF || true
+if [ -z "${OPENSSL_BIN:-}" ] || [ ! -x "${OPENSSL_BIN}" ]; then
+    echo "[ERROR] 未找到可用的 openssl: OPENSSL_BIN=${OPENSSL_BIN:-}"
+    exit 1
 fi
 
 echo "[INFO] 生成 Nginx TLS 自签名证书..."
 echo "[INFO] OPENSSL_BIN=${OPENSSL_BIN}"
 echo "[INFO] OPENSSL_CONF=${OPENSSL_CONF:-<unset>}"
-echo "[INFO] LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
+ls -la "${OPENSSL_CONF}" || {
+    echo "[ERROR] OPENSSL_CONF 文件不存在: ${OPENSSL_CONF}"
+    exit 1
+}
 "${OPENSSL_BIN}" version
 
 mkdir -p "${TLS_CERT_DIR}"
 if [ ! -w "${TLS_CERT_DIR}" ]; then
     echo "[ERROR] 目录不可写: ${TLS_CERT_DIR}"
-    ls -la /etc/nginx/ || true
     exit 1
 fi
 
@@ -65,11 +60,7 @@ if [ "${RC}" -ne 0 ] || [ ! -s "${TLS_CERT_DIR}/tls_key.pem" ]; then
     set -e
     if [ "${RC}" -ne 0 ] || [ ! -s "${TLS_CERT_DIR}/tls_key.pem" ]; then
         echo "[ERROR] 生成 TLS 私钥失败 (rc=${RC})"
-        echo "----- openssl 错误输出 -----"
         cat "${ERR}" 2>/dev/null || true
-        echo "----- 诊断 -----"
-        ldd "${OPENSSL_BIN}" 2>/dev/null | head -20 || true
-        ls -la "${TLS_CERT_DIR}" || true
         exit 1
     fi
 fi
@@ -87,7 +78,6 @@ RC=$?
 set -e
 if [ "${RC}" -ne 0 ] || [ ! -s "${TLS_CERT_DIR}/tls_cert.pem" ]; then
     echo "[ERROR] 生成 TLS 证书失败 (rc=${RC})"
-    echo "----- openssl 错误输出 -----"
     cat "${ERR}" 2>/dev/null || true
     exit 1
 fi
