@@ -33,6 +33,9 @@ jobs:
               - 'Dockerfile'
               - 'docker/**'
               - 'tsa-server/**'
+              - 'sdk/**'
+              - 'sdk-demo/**'
+              - 'pom.xml'
               - 'docker-compose.yml'
               - '.github/workflows/docker-build.yml'
             maven:
@@ -59,10 +62,10 @@ jobs:
             echo "| Maven SDK | \`${{ needs.changes.outputs.maven }}\` |"
             echo ""
             echo "### Workflows"
-            echo "- [Docker Build & Push](../actions/workflows/docker-build.yml)"
-            echo "- [Maven CI](../actions/workflows/maven-ci.yml)"
+            echo "- [Docker Build & Push](../actions/workflows/docker-build.yml) ← 唯一发布（含 native 阶段）"
+            echo "- [Maven CI](../actions/workflows/maven-ci.yml) ← 仅库编译校验"
             echo ""
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              echo "> 手动触发请分别运行 **Docker Build & Push** / **Maven CI**，或直接 push 代码。"
+              echo "> 发布镜像请运行 **Docker Build & Push**。"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

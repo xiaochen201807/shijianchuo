@@ -51,14 +51,18 @@ Dockerfile：[`Dockerfile.demo`](../Dockerfile.demo)
 - 构建阶段：GraalVM Native Image  
 - 运行阶段：`debian:bookworm-slim` + 单个 `/app/tsa-demo`，**无 JVM**
 
-### 1.3 CI 产物
+### 1.3 CI / 发布
 
-GitHub Actions：**Native Binary CI**（`.github/workflows/native-ci.yml`）
+**不再单独维护 Native 工作流**（与最终镜像 Dockerfile 阶段 1 重复，浪费分钟数）。
 
-- Artifact：`tsa-demo-linux-amd64` / `tsa-demo-linux-arm64`
-- 镜像：`ghcr.io/xiaochen201807/shijianchuo/tsa-demo:native`（multi-arch，无 JVM）
+| 方式 | 说明 |
+|------|------|
+| **生产发布** | `Docker Build & Push` 多阶段构建，二进制编进 `ghcr.io/.../tsa` |
+| **本机调试二进制** | `scripts/build-native.sh` / `.ps1` |
+| **库编译检查** | `Maven CI`（只出 jar，不跑 native-image） |
 
 ---
+
 
 ## 2. 运行原生 Demo
 
@@ -78,15 +82,16 @@ curl -s -X POST http://localhost:9090/api/tsa/timestamp/text \
   -d '{"text":"Hello, TSA!"}'
 ```
 
-Docker：
+生产请直接跑最终镜像（已内嵌该二进制）：
 
 ```bash
-docker run --rm -p 9090:9090 \
-  -e TSA_URL=http://host.docker.internal:8080/tsa \
-  ghcr.io/xiaochen201807/shijianchuo/tsa-demo:native
+docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest
+docker compose -f docker-compose.ghcr.yml up -d
+curl "http://localhost:8080/api/sm3/hash?text=Hello"
 ```
 
 ---
+
 
 ## 3. 为何 SDK 仍是 JAR？
 
@@ -106,19 +111,19 @@ docker run --rm -p 9090:9090 \
 
 ---
 
-## 4. 与 TSA 服务镜像的关系
+## 4. 与最终镜像的关系
 
 ```text
-┌─────────────────────────────┐     POST /tsa      ┌──────────────────────────┐
-│ tsa-demo (native binary)    │ ─────────────────► │ tsa All-in-One 镜像      │
-│ 无 JVM                      │                    │ Tongsuo+nginx+fcgiwrap   │
-│ 镜像: .../tsa-demo:native   │                    │ 无 JVM                   │
-└─────────────────────────────┘                    └──────────────────────────┘
+最终镜像 ghcr.io/.../tsa
+  supervisor
+    ├─ Tongsuo/nginx/fcgiwrap/chrony   →  POST /tsa
+    └─ /usr/local/bin/tsa-demo (native) →  /api/*   (无 JVM)
 ```
 
-两套镜像都 **不包含 JVM**。
+一条流水线、一个镜像，不再单独发布 `tsa-demo` 镜像。
 
 ---
+
 
 ## 5. 体积与注意点
 

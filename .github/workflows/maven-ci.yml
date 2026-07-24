@@ -60,7 +60,8 @@ jobs:
           {
             echo "## Maven CI"
             echo ""
-            echo "- **SDK** (\`tsa-spring-boot-starter\`): 仍为 **JAR 库**，供其它 Java/Spring 项目依赖"
-            echo "- **Demo 可执行程序**: 请使用 **Native Binary CI** 产出无 JVM 二进制 / 镜像"
-            echo "- 构建命令: \`mvn -Pnative -DskipTests package\` → \`sdk-demo/target/tsa-demo\`"
+            echo "- **SDK** jar：供其它 Java 项目依赖"
+            echo "- **运行时/原生二进制**：不在此流水线构建"
+            echo "- **发布镜像**：Docker Build & Push（Dockerfile 多阶段已含 GraalVM native）"
+            echo "- 本机调试二进制：\`scripts/build-native.sh\`"
           } >> "$GITHUB_STEP_SUMMARY"

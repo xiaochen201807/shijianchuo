@@ -153,9 +153,8 @@ TimeStampResult r = tsaClient.timestamp("Hello, TSA!");
 
 | Workflow | 说明 |
 |----------|------|
-| **Docker Build & Push** | 构建 **1 个** multi-arch 服务镜像 `.../tsa`（amd64 + arm64，无 JVM） |
-| **Native Binary CI** | 构建 `tsa-demo` **原生二进制** + 无 JVM 镜像 `.../tsa-demo` |
-| **Maven CI** | 编译 SDK **库 jar**（供依赖，不是运行时镜像） |
+| **Docker Build & Push** | **唯一发布流水线**：GraalVM native + Tongsuo 运行时 → `.../tsa`（无 JVM） |
+| **Maven CI** | 仅校验 SDK **库 jar** 编译（给其它 Java 项目依赖，不发布运行镜像） |
 
 ```bash
 docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest
