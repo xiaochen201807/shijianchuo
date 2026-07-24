@@ -104,22 +104,46 @@ if [ ! -x "${OPENSSL_BIN}" ]; then
     exit 0
 fi
 
-log_info "Generating timestamp with: ${OPENSSL_BIN} ts -reply -md sm3"
-
 # RFC 3161 TimeStampResp
-# -md sm3: 国密摘要；签名算法由 SM2 证书决定
+# 注意: Tongsuo/OpenSSL 3 的 ts -reply 不接受 "-md sm3"
+#       摘要算法以客户端 TimeStampReq 内的 messageImprint 为准
+#       （SDK/客户端用 SM3 请求即可；签名由 SM2 证书完成）
+log_info "Generating timestamp with: ${OPENSSL_BIN} ts -reply"
+
+set +e
 "${OPENSSL_BIN}" ts -reply \
     -queryfile "${QUERY_FILE}" \
     -signer /etc/tsa/certs/tsacert.pem \
     -inkey /etc/tsa/certs/tsakey.pem \
-    -md sm3 \
     -chain /etc/tsa/certs/cacert.pem \
     -config /etc/tsa/openssl/tsa.cnf \
     -section tsa \
     -out "${RESP_FILE}" \
     2> "${ERR_FILE}"
-
 REPLY_STATUS=$?
+set -e
+
+# 部分版本支持把摘要写成独立开关 -sm3（不是 -md sm3）；仅在首次失败时重试
+if [ ${REPLY_STATUS} -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
+    if grep -qi 'unknown options.*"md"' "${ERR_FILE}" 2>/dev/null \
+       || grep -qi 'Extra (unknown) options' "${ERR_FILE}" 2>/dev/null; then
+        log_info "retry ts -reply without unsupported options (already without -md)"
+    fi
+    # 若配置节/chain 有兼容问题，再试精简参数
+    if [ ${REPLY_STATUS} -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
+        set +e
+        "${OPENSSL_BIN}" ts -reply \
+            -queryfile "${QUERY_FILE}" \
+            -signer /etc/tsa/certs/tsacert.pem \
+            -inkey /etc/tsa/certs/tsakey.pem \
+            -config /etc/tsa/openssl/tsa.cnf \
+            -section tsa \
+            -out "${RESP_FILE}" \
+            2> "${ERR_FILE}"
+        REPLY_STATUS=$?
+        set -e
+    fi
+fi
 
 if [ ${REPLY_STATUS} -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
     log_error "ts -reply failed status=${REPLY_STATUS}"
