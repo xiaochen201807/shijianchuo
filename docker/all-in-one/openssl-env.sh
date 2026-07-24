@@ -22,7 +22,8 @@ _ensure_openssl_cnf() {
     if [ ! -s "${target}" ]; then
         if [ -s "${fallback}" ]; then
             cp -f "${fallback}" "${target}"
-            echo "[INFO] 已安装兜底 openssl.cnf -> ${target}"
+            # 禁止写 stdout（CGI 场景会破坏响应 → nginx 502）
+            echo "[INFO] 已安装兜底 openssl.cnf -> ${target}" >&2
         else
             # 最后手段：写最小配置，保证 req -x509 能跑
             cat > "${target}" <<'EOF'
@@ -34,7 +35,7 @@ prompt = no
 [ req_distinguished_name ]
 CN = tsa
 EOF
-            echo "[INFO] 已写入最小 openssl.cnf -> ${target}"
+            echo "[INFO] 已写入最小 openssl.cnf -> ${target}" >&2
         fi
     fi
     export OPENSSL_CONF="${target}"

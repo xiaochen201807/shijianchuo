@@ -1,175 +1,176 @@
 #!/bin/bash
 # ============================================================
-# tsa_cgi.sh - RFC 3161 时间戳 CGI
+# tsa_cgi.sh - RFC 3161 时间戳 CGI (Tongsuo)
 #
-# 使用 Tongsuo openssl ts -reply (SM2 证书 + SM3 摘要)
+# 关键:
+#   - openssl 可能把提示打到 stdout，必须全部重定向，否则 nginx 502
+#   - 不可 set -e（避免中途退出导致“no response received”）
+#   - 摘要算法以 TimeStampReq 为准，不要传 -md sm3
 # ============================================================
 
+# 禁止任何未捕获错误导致静默退出；全程自己返回 CGI 头
+set +e
+
 log_info() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*" >> /var/log/tsa/tsa_cgi.log
+    mkdir -p /var/log/tsa 2>/dev/null
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*" >> /var/log/tsa/tsa_cgi.log 2>/dev/null
 }
 
 log_error() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >> /var/log/tsa/tsa_error.log
+    mkdir -p /var/log/tsa 2>/dev/null
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >> /var/log/tsa/tsa_error.log 2>/dev/null
 }
 
-# 国密 OpenSSL (Tongsuo)
-if [ -n "${OPENSSL_BIN:-}" ] && [ -x "${OPENSSL_BIN}" ]; then
-    :
-elif [ -x /usr/local/tongsuo/bin/openssl ]; then
+cgi_text() {
+    # $1=status line e.g. "500 Internal Server Error", rest=body
+    local status="$1"
+    shift
+    local body="$*"
+    printf "Status: %s\r\n" "${status}"
+    printf "Content-Type: text/plain; charset=utf-8\r\n"
+    printf "Content-Length: %s\r\n" "$(printf '%s' "${body}" | wc -c)"
+    printf "\r\n"
+    printf '%s' "${body}"
+}
+
+# --- 环境 (不要向 stdout 打日志) ---
+export PATH="/usr/local/tongsuo/bin:/usr/local/bin:/usr/bin:/bin"
+export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export HOME="${HOME:-/var/lib/tsa}"
+export TMPDIR="${TMPDIR:-/tmp}"
+
+if [ -x /usr/local/tongsuo/bin/openssl ]; then
     OPENSSL_BIN=/usr/local/tongsuo/bin/openssl
 elif [ -x /usr/local/bin/openssl-gm ]; then
     OPENSSL_BIN=/usr/local/bin/openssl-gm
 else
-    OPENSSL_BIN="$(command -v openssl || true)"
-fi
-if [ -f /scripts/openssl-env.sh ]; then
-    # shellcheck source=/dev/null
-    . /scripts/openssl-env.sh
-else
-    export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    mkdir -p /usr/local/tongsuo/ssl
-    if [ ! -s /usr/local/tongsuo/ssl/openssl.cnf ] && [ -s /etc/tsa/openssl/openssl-runtime.cnf ]; then
-        cp -f /etc/tsa/openssl/openssl-runtime.cnf /usr/local/tongsuo/ssl/openssl.cnf
-    fi
-    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
+    OPENSSL_BIN="$(command -v openssl 2>/dev/null)"
 fi
 
+# 确保 cnf 存在（fcgiwrap 用户可能无写 /usr/local，优先用已有文件）
+if [ -s /usr/local/tongsuo/ssl/openssl.cnf ]; then
+    export OPENSSL_CONF=/usr/local/tongsuo/ssl/openssl.cnf
+elif [ -s /etc/tsa/openssl/openssl-runtime.cnf ]; then
+    export OPENSSL_CONF=/etc/tsa/openssl/openssl-runtime.cnf
+else
+    export OPENSSL_CONF=/etc/tsa/openssl/tsa.cnf
+fi
+
+TSA_CONF=/etc/tsa/openssl/tsa.cnf
+SIGNER=/etc/tsa/certs/tsacert.pem
+INKEY=/etc/tsa/certs/tsakey.pem
+CHAIN=/etc/tsa/certs/cacert.pem
+
+# --- 方法检查 ---
 if [ "${REQUEST_METHOD}" != "POST" ]; then
     log_error "Invalid method: ${REQUEST_METHOD}"
-    printf "Status: 405 Method Not Allowed\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "405 Method Not Allowed. Use POST with Content-Type: application/timestamp-query.\n"
+    cgi_text "405 Method Not Allowed" "405 Method Not Allowed. Use POST."
     exit 0
 fi
 
-log_info "Incoming request: method=${REQUEST_METHOD}, content_length=${CONTENT_LENGTH}, content_type=${CONTENT_TYPE}, openssl=${OPENSSL_BIN}"
+log_info "req method=${REQUEST_METHOD} len=${CONTENT_LENGTH} type=${CONTENT_TYPE} openssl=${OPENSSL_BIN} conf=${OPENSSL_CONF}"
 
-if [ -z "${CONTENT_LENGTH}" ] || [ "${CONTENT_LENGTH}" -le 0 ]; then
-    log_error "Empty or missing Content-Length"
-    printf "Status: 400 Bad Request\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "400 Bad Request. Missing or empty Content-Length.\n"
+if [ -z "${CONTENT_LENGTH}" ] || [ "${CONTENT_LENGTH}" -le 0 ] 2>/dev/null; then
+    log_error "bad Content-Length: ${CONTENT_LENGTH}"
+    cgi_text "400 Bad Request" "400 Bad Request. Missing or empty Content-Length."
     exit 0
 fi
 
-MAX_SIZE=$((10 * 1024 * 1024))
-if [ "${CONTENT_LENGTH}" -gt "${MAX_SIZE}" ]; then
-    log_error "Request too large: ${CONTENT_LENGTH} bytes"
-    printf "Status: 413 Request Entity Too Large\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "413 Request Entity Too Large. Maximum size is 10MB.\n"
-    exit 0
-fi
-
-TMPDIR=$(mktemp -d /tmp/tsa_XXXXXX) || {
-    log_error "Failed to create temp directory"
-    printf "Status: 500 Internal Server Error\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "500 Internal Server Error.\n"
-    exit 0
-}
-
-QUERY_FILE="${TMPDIR}/query.tsq"
-RESP_FILE="${TMPDIR}/response.tsr"
-ERR_FILE="${TMPDIR}/error.log"
-
-dd bs=1 count="${CONTENT_LENGTH}" of="${QUERY_FILE}" 2>/dev/null < /dev/stdin || {
-    log_error "Failed to read request body"
-    printf "Status: 500 Internal Server Error\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "500 Internal Server Error. Failed to read request body.\n"
-    rm -rf "${TMPDIR}"
-    exit 0
-}
-
-QUERY_SIZE=$(stat -c%s "${QUERY_FILE}" 2>/dev/null || echo 0)
-log_info "Query file size: ${QUERY_SIZE} bytes"
-
-if [ "${QUERY_SIZE}" -eq 0 ]; then
-    log_error "Empty query file"
-    printf "Status: 400 Bad Request\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "400 Bad Request. Empty request body.\n"
-    rm -rf "${TMPDIR}"
+if [ "${CONTENT_LENGTH}" -gt $((10 * 1024 * 1024)) ] 2>/dev/null; then
+    cgi_text "413 Request Entity Too Large" "413 Request too large."
     exit 0
 fi
 
 if [ ! -x "${OPENSSL_BIN}" ]; then
-    log_error "OPENSSL_BIN not found: ${OPENSSL_BIN}"
-    printf "Status: 500 Internal Server Error\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "500 Internal Server Error. OpenSSL (Tongsuo) not available.\n"
-    rm -rf "${TMPDIR}"
+    log_error "openssl missing: ${OPENSSL_BIN}"
+    cgi_text "500 Internal Server Error" "500 openssl not found: ${OPENSSL_BIN}"
     exit 0
 fi
 
-# RFC 3161 TimeStampResp
-# 注意: Tongsuo/OpenSSL 3 的 ts -reply 不接受 "-md sm3"
-#       摘要算法以客户端 TimeStampReq 内的 messageImprint 为准
-#       （SDK/客户端用 SM3 请求即可；签名由 SM2 证书完成）
-log_info "Generating timestamp with: ${OPENSSL_BIN} ts -reply"
+for f in "${SIGNER}" "${INKEY}" "${TSA_CONF}"; do
+    if [ ! -r "${f}" ]; then
+        log_error "not readable: ${f}"
+        cgi_text "500 Internal Server Error" "500 missing or unreadable: ${f}"
+        exit 0
+    fi
+done
 
-set +e
-"${OPENSSL_BIN}" ts -reply \
-    -queryfile "${QUERY_FILE}" \
-    -signer /etc/tsa/certs/tsacert.pem \
-    -inkey /etc/tsa/certs/tsakey.pem \
-    -chain /etc/tsa/certs/cacert.pem \
-    -config /etc/tsa/openssl/tsa.cnf \
-    -section tsa \
-    -out "${RESP_FILE}" \
-    2> "${ERR_FILE}"
+TMPDIR=$(mktemp -d /tmp/tsa_XXXXXX 2>/dev/null)
+if [ -z "${TMPDIR}" ] || [ ! -d "${TMPDIR}" ]; then
+    log_error "mktemp failed"
+    cgi_text "500 Internal Server Error" "500 cannot create temp dir"
+    exit 0
+fi
+
+QUERY_FILE="${TMPDIR}/query.tsq"
+RESP_FILE="${TMPDIR}/response.tsr"
+ERR_FILE="${TMPDIR}/error.log"
+OUT_FILE="${TMPDIR}/openssl.stdout"
+
+# 读请求体
+dd bs=1 count="${CONTENT_LENGTH}" of="${QUERY_FILE}" 2>/dev/null < /dev/stdin
+QUERY_SIZE=$(wc -c < "${QUERY_FILE}" 2>/dev/null | tr -d ' ')
+log_info "query size=${QUERY_SIZE}"
+
+if [ -z "${QUERY_SIZE}" ] || [ "${QUERY_SIZE}" -eq 0 ]; then
+    rm -rf "${TMPDIR}"
+    cgi_text "400 Bad Request" "400 empty body"
+    exit 0
+fi
+
+# --- 调用 ts -reply（stdout/stderr 全部离开 CGI 通道）---
+# Tongsuo 不支持 -md sm3；摘要以请求为准
+run_reply() {
+    # "$@" extra args
+    "${OPENSSL_BIN}" ts -reply \
+        -queryfile "${QUERY_FILE}" \
+        -signer "${SIGNER}" \
+        -inkey "${INKEY}" \
+        -config "${TSA_CONF}" \
+        -section tsa \
+        -out "${RESP_FILE}" \
+        "$@" \
+        >"${OUT_FILE}" 2>"${ERR_FILE}"
+    return $?
+}
+
+rm -f "${RESP_FILE}"
+run_reply -chain "${CHAIN}"
 REPLY_STATUS=$?
-set -e
 
-# 部分版本支持把摘要写成独立开关 -sm3（不是 -md sm3）；仅在首次失败时重试
-if [ ${REPLY_STATUS} -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
-    if grep -qi 'unknown options.*"md"' "${ERR_FILE}" 2>/dev/null \
-       || grep -qi 'Extra (unknown) options' "${ERR_FILE}" 2>/dev/null; then
-        log_info "retry ts -reply without unsupported options (already without -md)"
-    fi
-    # 若配置节/chain 有兼容问题，再试精简参数
-    if [ ${REPLY_STATUS} -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
-        set +e
-        "${OPENSSL_BIN}" ts -reply \
-            -queryfile "${QUERY_FILE}" \
-            -signer /etc/tsa/certs/tsacert.pem \
-            -inkey /etc/tsa/certs/tsakey.pem \
-            -config /etc/tsa/openssl/tsa.cnf \
-            -section tsa \
-            -out "${RESP_FILE}" \
-            2> "${ERR_FILE}"
-        REPLY_STATUS=$?
-        set -e
-    fi
+if [ "${REPLY_STATUS}" -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
+    log_info "retry without -chain; err=$(tr '\n' ' ' < "${ERR_FILE}" 2>/dev/null)"
+    rm -f "${RESP_FILE}"
+    run_reply
+    REPLY_STATUS=$?
 fi
 
-if [ ${REPLY_STATUS} -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
-    log_error "ts -reply failed status=${REPLY_STATUS}"
-    log_error "Error: $(cat "${ERR_FILE}" 2>/dev/null)"
+if [ "${REPLY_STATUS}" -ne 0 ] || [ ! -s "${RESP_FILE}" ]; then
+    ERR_MSG=$(cat "${ERR_FILE}" "${OUT_FILE}" 2>/dev/null)
+    log_error "ts -reply failed rc=${REPLY_STATUS} err=${ERR_MSG}"
+    BODY="500 Timestamp generation failed (rc=${REPLY_STATUS}).
+openssl=${OPENSSL_BIN}
+OPENSSL_CONF=${OPENSSL_CONF}
 
-    printf "Status: 500 Internal Server Error\r\n"
-    printf "Content-Type: text/plain\r\n\r\n"
-    printf "500 Internal Server Error. Timestamp generation failed.\n"
-    printf "\nError details:\n"
-    cat "${ERR_FILE}"
-
+${ERR_MSG}
+"
     rm -rf "${TMPDIR}"
+    cgi_text "500 Internal Server Error" "${BODY}"
     exit 0
 fi
 
-RESP_SIZE=$(stat -c%s "${RESP_FILE}")
-log_info "Response generated: ${RESP_SIZE} bytes"
+RESP_SIZE=$(wc -c < "${RESP_FILE}" | tr -d ' ')
+log_info "response size=${RESP_SIZE}"
 
+# 成功：标准 CGI 头 + 二进制体
 printf "Status: 200 OK\r\n"
 printf "Content-Type: application/timestamp-reply\r\n"
-printf "Content-Length: %d\r\n" "${RESP_SIZE}"
+printf "Content-Length: %s\r\n" "${RESP_SIZE}"
 printf "Cache-Control: no-store, no-cache, must-revalidate\r\n"
 printf "Pragma: no-cache\r\n"
 printf "\r\n"
 cat "${RESP_FILE}"
 
 rm -rf "${TMPDIR}"
-log_info "Request completed successfully"
+log_info "ok"
 exit 0

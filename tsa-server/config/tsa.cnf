@@ -39,16 +39,22 @@ default_tsa = tsa_config1
 [tsa_config1]
 dir = /etc/tsa
 serial = $dir/certs/tsaserial
+crypto_device = builtin
 signer_cert = $dir/certs/tsacert.pem
 signer_key = $dir/certs/tsakey.pem
+# 可选证书链（部分版本也支持命令行 -chain）
 certs = $dir/certs/cacert.pem
 default_policy = 1.2.3.4.1
 other_policies = 1.2.3.4.5
-# 国密 SM3 + 常见摘要
-digests = sm3, sha256, sha384, sha512
-accuracy = secs:1, millisecs:0, microsecs:0
+# 客户端 TimeStampReq 使用的摘要（BouncyCastle SM3 OID 对应 sm3）
+digests = sm3, SM3, sha256, sha384, sha512
+accuracy = secs:1, millisecs:500, microsecs:0
 clock_precision_digits = 0
+ordering = yes
+tsa_name = yes
 ess_cert_id_chain = no
+# 签名时对 token 的摘要（SM2 证书常用 SM3）
+signer_digest = sm3
 
 # --- 证书请求 ---
 [req]
