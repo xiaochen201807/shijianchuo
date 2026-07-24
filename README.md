@@ -2,9 +2,15 @@
 
 自建 **RFC 3161** 合规时间戳授权机构（TSA），支持 **SM2 / SM3 国密算法**。
 
-**部署形态：All-in-One 单镜像**（`Tongsuo 国密 OpenSSL + nginx + fcgiwrap + chrony`，supervisor 托管），并提供 **Java Spring Boot Starter** 客户端 SDK。
+**最终唯一镜像** `ghcr.io/xiaochen201807/shijianchuo/tsa`：
 
-> **密码库说明**：GmSSL 3 CLI 不再兼容 `ecparam`/`ts` 等 OpenSSL 命令，RFC 3161 签发改用 **Tongsuo**（SM2/SM3 + `openssl ts`）。
+```text
+Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
+        + tsa-demo 原生二进制 (GraalVM，无 JVM)
+```
+
+多阶段构建：先编出 `tsa-demo`，再打进运行时镜像，由 **supervisor 一起拉起**。  
+对外：`/tsa` 时间戳，`/api/*` 为 Demo REST（反代到原生进程）。
 
 > - 完整操作手册：[`docs/operation-manual.md`](docs/operation-manual.md)  
 > - **服务器拉取部署 + 测试**（Compose 全文）：[`docs/server-deploy-and-test.md`](docs/server-deploy-and-test.md)
@@ -58,47 +64,32 @@ curl http://localhost:8080/info
 
 首次构建约 **10–15 分钟**（编译 GmSSL3）。
 
-### 3. 使用 GHCR 预构建镜像（免本地编译）
+### 3. 拉取最终镜像（服务 + 原生 Demo，无 JVM）
 
-服务器侧 **Compose 全文、端口、测试命令** 见：
-
-**→ [`docs/server-deploy-and-test.md`](docs/server-deploy-and-test.md)**
-
-```powershell
-$env:IMAGE_TAG = "latest"
-# 私有包需: docker login ghcr.io
-docker compose -f docker-compose.ghcr.yml pull
+```bash
+docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest
 docker compose -f docker-compose.ghcr.yml up -d
+
+curl http://localhost:8080/health
+curl "http://localhost:8080/api/sm3/hash?text=Hello"
+curl -X POST http://localhost:8080/api/tsa/timestamp/text \
+  -H "Content-Type: application/json" -d '{"text":"Hello, TSA!"}'
 ```
 
-**唯一镜像地址：**
+| 端口 | 用途 |
+|------|------|
+| `8080` | TSA `/tsa` + Demo `/api/*`（推荐） |
+| `8443` | HTTPS |
+| `9090` | Demo 直连（可选） |
 
-```text
-ghcr.io/xiaochen201807/shijianchuo/tsa:latest
+完整手册：[`docs/server-deploy-and-test.md`](docs/server-deploy-and-test.md)
+
+### 4. 开发时单独编 Demo 二进制（可选）
+
+```bash
+bash ./scripts/build-native.sh          # → sdk-demo/target/tsa-demo
+# 生产请用最终镜像，不必单独跑 tsa-demo 镜像
 ```
-
-多架构：`linux/amd64` + `linux/arm64`，`docker pull` 自动选择。
-
-### 4. 编译 / 运行 Demo（推荐原生二进制，无 JVM）
-
-| 方式 | 命令 | 是否需要 JVM |
-|------|------|----------------|
-| **原生二进制（推荐）** | `bash scripts/build-native.sh` 或 Docker | **否** |
-| 开发调试 jar | `mvn -pl sdk-demo -am spring-boot:run` | 是 |
-
-```powershell
-# 方式 A: Docker 构建并运行原生 Demo（镜像内无 JRE）
-docker compose -f docker-compose.demo.yml up --build -d
-curl "http://localhost:9090/api/sm3/hash?text=Hello"
-
-# 方式 B: 本机 GraalVM 出二进制
-# bash ./scripts/build-native.sh
-# ./sdk-demo/target/tsa-demo
-```
-
-- 说明文档：[`docs/native-binary.md`](docs/native-binary.md)
-- Demo：`http://localhost:9090` · TSA：`http://localhost:8080/tsa`
-- **SDK 库**仍为 jar（给其它 Java 项目依赖）；**可执行程序**为 `tsa-demo` 原生文件
 
 ---
 

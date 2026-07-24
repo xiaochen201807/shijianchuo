@@ -9,11 +9,11 @@ docs
 .env
 .env.local
 docker-compose*.yml
-# 旧分体镜像
+Dockerfile.demo
+# 旧分体
 nginx
 chrony
 tsa-server/Dockerfile
 tsa-server/scripts/entrypoint.sh
 tsa-server/scripts/healthcheck.sh
-# all-in-one 构建不需要 Java 源码；demo 原生镜像需要 sdk/sdk-demo
-# （Dockerfile.demo 使用根 context，会复制 sdk + sdk-demo）
+# 保留 sdk / sdk-demo 供多阶段 native 编译

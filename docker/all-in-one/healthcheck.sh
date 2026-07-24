@@ -1,29 +1,38 @@
 #!/bin/bash
-# All-in-One 健康检查
+# 最终镜像健康检查: TSA nginx + 原生 Demo
 
 set -e
 
-# SM2 证书
 if [ ! -f /etc/tsa/certs/tsacert.pem ] || [ ! -f /etc/tsa/certs/tsakey.pem ]; then
     echo "TSA certificate missing"
     exit 1
 fi
 
-# fcgiwrap
 if ! pgrep -f fcgiwrap >/dev/null 2>&1; then
     echo "fcgiwrap not running"
     exit 1
 fi
 
-# nginx
 if ! pgrep -x nginx >/dev/null 2>&1; then
     echo "nginx not running"
     exit 1
 fi
 
-# HTTP 探活
+# 原生 Demo 进程 (二进制名 tsa-demo)
+if ! pgrep -f '/usr/local/bin/tsa-demo|tsa-demo' >/dev/null 2>&1; then
+    echo "tsa-demo native binary not running"
+    exit 1
+fi
+
 if ! curl -sf http://127.0.0.1/health >/dev/null; then
     echo "HTTP /health failed"
+    exit 1
+fi
+
+# Demo API (经 nginx 反代 或 直连 9090)
+if ! curl -sf "http://127.0.0.1/api/sm3/hash?text=ok" >/dev/null \
+   && ! curl -sf "http://127.0.0.1:9090/api/sm3/hash?text=ok" >/dev/null; then
+    echo "tsa-demo /api health failed"
     exit 1
 fi
 

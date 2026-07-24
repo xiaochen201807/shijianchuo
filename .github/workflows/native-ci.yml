@@ -1,6 +1,7 @@
 # ============================================================
-# 原生二进制构建 (GraalVM Native Image) — 无 JVM 产物
-# 产物: tsa-demo (linux/amd64 与 linux/arm64)
+# 原生二进制 Artifact 构建 (可选)
+# 生产发布以 Docker Build & Push → ghcr.io/.../tsa 为准
+# （最终镜像已内嵌 tsa-demo 原生二进制，无需单独 tsa-demo 镜像）
 # ============================================================
 name: Native Binary CI
 
@@ -11,7 +12,6 @@ on:
       - "sdk/**"
       - "sdk-demo/**"
       - "pom.xml"
-      - "Dockerfile.demo"
       - ".github/workflows/native-ci.yml"
   pull_request:
     branches: [main, master, develop]
@@ -19,46 +19,28 @@ on:
       - "sdk/**"
       - "sdk-demo/**"
       - "pom.xml"
-      - "Dockerfile.demo"
       - ".github/workflows/native-ci.yml"
   workflow_dispatch:
-    inputs:
-      push_image:
-        description: "是否推送 tsa-demo 原生镜像到 GHCR"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
 
 concurrency:
   group: native-ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: tsa-demo
-
 jobs:
-  # ------------------------------------------------------------
-  # 原生二进制 (按架构原生 runner，避免 QEMU)
-  # ------------------------------------------------------------
   build-native:
-    name: Native ${{ matrix.platform }}
+    name: Native binary ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
+          - runner: ubuntu-latest
             arch: amd64
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+          - runner: ubuntu-24.04-arm
             arch: arm64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up GraalVM 21
         uses: graalvm/setup-graalvm@v1
@@ -66,198 +48,32 @@ jobs:
           java-version: "21"
           distribution: "graalvm-community"
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          native-image-job-reports: true
           cache: maven
-
-      - name: Show versions
-        run: |
-          java -version
-          native-image --version
-          mvn -version
 
       - name: Build native binary
         run: |
           mvn -B -f pom.xml -pl sdk -am clean install -DskipTests
           mvn -B -f pom.xml -pl sdk-demo -am -Pnative -DskipTests package
-          ls -lh sdk-demo/target/tsa-demo
-          file sdk-demo/target/tsa-demo
-          # 冒烟：帮助/版本类启动参数（应用会监听端口，仅检查文件可执行）
           test -x sdk-demo/target/tsa-demo
+          ls -lh sdk-demo/target/tsa-demo
 
-      - name: Package binary artifact
-        run: |
-          mkdir -p dist
-          cp sdk-demo/target/tsa-demo "dist/tsa-demo-linux-${{ matrix.arch }}"
-          chmod +x "dist/tsa-demo-linux-${{ matrix.arch }}"
-          # 附带配置示例
-          cp sdk-demo/src/main/resources/application.yml dist/application.yml
-          (cd dist && sha256sum "tsa-demo-linux-${{ matrix.arch }}" > "tsa-demo-linux-${{ matrix.arch }}.sha256")
-          ls -lh dist/
-
-      - name: Upload binary
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tsa-demo-linux-${{ matrix.arch }}
-          path: |
-            dist/tsa-demo-linux-${{ matrix.arch }}
-            dist/tsa-demo-linux-${{ matrix.arch }}.sha256
-            dist/application.yml
-          if-no-files-found: error
+          path: sdk-demo/target/tsa-demo
           retention-days: 30
 
-      - name: Summary
+      - name: Note
         run: |
           {
-            echo "## Native binary (${{ matrix.arch }})"
+            echo "## Native binary artifact only"
             echo ""
-            echo "- File: \`tsa-demo-linux-${{ matrix.arch }}\`"
-            echo "- No JVM required"
-            ls -lh dist/tsa-demo-linux-${{ matrix.arch }}
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # ------------------------------------------------------------
-  # 可选: 推送无 JVM 的 demo 镜像到 GHCR
-  # ------------------------------------------------------------
-  push-image:
-    name: Push demo image (${{ matrix.arch }})
-    needs: build-native
-    if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.push_image == 'true')
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-            platform: linux/amd64
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-            platform: linux/arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Image name (lowercase)
-        id: meta
-        run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          REPO=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
-          echo "image=ghcr.io/${OWNER}/${REPO}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & push (single arch by digest)
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.demo
-          platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ steps.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=tsa-demo-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=tsa-demo-${{ matrix.arch }}
-          provenance: false
-          sbom: false
-
-      - name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          touch "/tmp/digests/${{ steps.build.outputs.digest }}"
-          # digest 格式 sha256:xxx → 文件名用完整或去掉前缀
-          DIGEST="${{ steps.build.outputs.digest }}"
-          rm -f "/tmp/digests/${DIGEST}"
-          touch "/tmp/digests/${DIGEST#sha256:}"
-
-      - name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: digests-demo-${{ matrix.arch }}
-          path: /tmp/digests/*
-          retention-days: 1
-
-  merge-image:
-    name: Merge multi-arch demo image
-    needs: [push-image]
-    if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.push_image == 'true')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Download digests
-        uses: actions/download-artifact@v4
-        with:
-          pattern: digests-demo-*
-          path: /tmp/digests
-          merge-multiple: true
-
-      - name: Image name
-        id: meta
-        run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          REPO=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
-          echo "image=ghcr.io/${OWNER}/${REPO}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata tags
-        id: tags
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.meta.outputs.image }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=native,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=sha,prefix=sha-,format=short
-
-      - name: Create multi-arch manifest
-        working-directory: /tmp/digests
-        run: |
-          set -euo pipefail
-          IMAGE="${{ steps.meta.outputs.image }}"
-          REFS=()
-          for f in *; do
-            [ -f "$f" ] || continue
-            REFS+=("${IMAGE}@sha256:${f}")
-          done
-          TAG_ARGS=()
-          while IFS= read -r t; do
-            [ -n "$t" ] || continue
-            TAG_ARGS+=("-t" "$t")
-          done <<< "${{ steps.tags.outputs.tags }}"
-          docker buildx imagetools create "${TAG_ARGS[@]}" "${REFS[@]}"
-          {
-            echo "## tsa-demo native image (no JVM)"
+            echo "生产请使用最终镜像（内嵌此二进制）:"
             echo ""
-            echo "\`docker pull ${IMAGE}:native\`"
-            echo ""
-            echo "Tags:"
+            echo '```bash'
+            echo "docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest"
             echo '```'
-            echo "${{ steps.tags.outputs.tags }}"
-            echo '```'
+            echo ""
+            echo "单独 Artifact 仅供下载调试，不再推送独立 tsa-demo 镜像。"
           } >> "$GITHUB_STEP_SUMMARY"

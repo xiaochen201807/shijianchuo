@@ -1,4 +1,8 @@
-# ============================================================
+# !!! DEPRECATED !!!
+# 最终请使用根目录 Dockerfile（已内嵌 tsa-demo 原生二进制）
+# 镜像: ghcr.io/xiaochen201807/shijianchuo/tsa:latest
+# 本文件仅保留作单独调试 Demo 二进制镜像，生产勿用。
+## ============================================================
 # tsa-demo 原生二进制镜像 — 无 JVM
 #
 # 构建:
@@ -60,3 +64,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # 原生二进制直接启动，进程内无 JVM
 ENTRYPOINT ["/app/tsa-demo"]
+

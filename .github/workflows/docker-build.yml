@@ -1,7 +1,8 @@
 # ============================================================
-# Docker 多架构 All-in-One 镜像 (linux/amd64 + linux/arm64)
-# 镜像名: ghcr.io/<owner>/<repo>/tsa
-# 内含: GmSSL3 + nginx + fcgiwrap + chrony
+# 最终镜像构建 (linux/amd64 + linux/arm64)
+# 镜像: ghcr.io/<owner>/<repo>/tsa
+# 内容: Tongsuo TSA + nginx + chrony + tsa-demo 原生二进制 (无 JVM)
+# 构建: 多阶段 Dockerfile (GraalVM native → 运行时)
 # ============================================================
 name: Docker Build & Push
 
@@ -13,6 +14,9 @@ on:
       - "Dockerfile"
       - "docker/**"
       - "tsa-server/**"
+      - "sdk/**"
+      - "sdk-demo/**"
+      - "pom.xml"
       - "docker-compose.yml"
       - ".github/workflows/docker-build.yml"
   pull_request:
@@ -21,6 +25,9 @@ on:
       - "Dockerfile"
       - "docker/**"
       - "tsa-server/**"
+      - "sdk/**"
+      - "sdk-demo/**"
+      - "pom.xml"
       - "docker-compose.yml"
       - ".github/workflows/docker-build.yml"
   workflow_dispatch:
@@ -74,7 +81,8 @@ jobs:
     name: Build (${{ matrix.platform }})
     needs: prepare
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    # Tongsuo 编译 + GraalVM native-image，耗时较长
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: write
@@ -124,10 +132,13 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=RFC3161 GM TSA + native tsa-demo (no JVM)
           outputs: ${{ needs.prepare.outputs.push == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', needs.prepare.outputs.image) || 'type=cacheonly' }}
-          cache-from: type=gha,scope=tsa-${{ steps.prep.outputs.platform_pair }}
-          cache-to: type=gha,mode=max,scope=tsa-${{ steps.prep.outputs.platform_pair }}
+          cache-from: type=gha,scope=tsa-final-${{ steps.prep.outputs.platform_pair }}
+          cache-to: type=gha,mode=max,scope=tsa-final-${{ steps.prep.outputs.platform_pair }}
           provenance: false
           sbom: false
 

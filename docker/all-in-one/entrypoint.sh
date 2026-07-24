@@ -1,89 +1,83 @@
 #!/bin/bash
 # ============================================================
-# All-in-One 入口
+# All-in-One 入口: 证书 → 校验 → supervisord
+# 进程: chronyd + fcgiwrap + nginx + tsa-demo(原生二进制)
 # ============================================================
 
 set -e
 
 export PATH="/usr/local/tongsuo/bin:${PATH}"
-export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/tongsuo/lib:/usr/local/tongsuo/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export OPENSSL_BIN="${OPENSSL_BIN:-/usr/local/tongsuo/bin/openssl}"
 
 echo "============================================"
-echo "  RFC 3161 国密 TSA (All-in-One) 启动中"
+echo "  RFC 3161 国密 TSA 最终镜像启动"
 echo "  时间: $(date)"
-echo "  时区: Asia/Shanghai"
 echo "============================================"
 
 echo ""
-echo "[1/5] 检查目录..."
+echo "[1/6] 目录..."
 mkdir -p \
-    /etc/tsa/certs \
-    /etc/nginx/tls \
-    /var/www/tsa \
-    /var/lib/tsa \
-    /var/log/tsa \
-    /var/log/nginx \
-    /var/log/supervisor \
-    /var/log/chrony \
-    /var/lib/chrony \
-    /run/fcgiwrap \
-    /run/chrony \
-    /run
+    /etc/tsa/certs /etc/nginx/tls /var/www/tsa /var/lib/tsa \
+    /var/log/tsa /var/log/nginx /var/log/supervisor /var/log/chrony \
+    /var/lib/chrony /run/fcgiwrap /run/chrony /run /opt/tsa-demo/config
 chown -R fcgiwrap:fcgiwrap /var/www/tsa /var/lib/tsa /run/fcgiwrap 2>/dev/null || true
-echo "[OK] 目录就绪"
+echo "[OK]"
 
 echo ""
-echo "[2/5] 检查/生成 SM2 国密证书..."
+echo "[2/6] SM2 证书..."
 if [ -f /etc/tsa/certs/tsacert.pem ] && [ -f /etc/tsa/certs/tsakey.pem ]; then
-    echo "[INFO] TSA 证书已存在，跳过生成"
+    echo "[INFO] 证书已存在"
 else
-    echo "[INFO] 开始生成 SM2 证书 (Tongsuo)..."
     /scripts/generate_certs.sh
 fi
 chmod 644 /etc/tsa/certs/tsacert.pem /etc/tsa/certs/cacert.pem 2>/dev/null || true
-# 序列号需可写
 chown -R fcgiwrap:fcgiwrap /etc/tsa/certs 2>/dev/null || true
 chmod 664 /etc/tsa/certs/tsaserial 2>/dev/null || true
-echo "[OK] 证书就绪"
+echo "[OK]"
 
 echo ""
-echo "[3/5] 检查/生成 Nginx TLS 证书..."
+echo "[3/6] TLS 证书..."
 if [ ! -f /etc/nginx/tls/tls_cert.pem ] || [ ! -f /etc/nginx/tls/tls_key.pem ]; then
     /scripts/generate_tls_certs.sh
 else
-    echo "[OK] TLS 证书已存在"
+    echo "[OK] 已存在"
 fi
 
 echo ""
-echo "[4/5] 验证国密 OpenSSL (Tongsuo)..."
-if [ ! -x "${OPENSSL_BIN}" ]; then
-    echo "[ERROR] 未找到 ${OPENSSL_BIN}"
+echo "[4/6] Tongsuo..."
+test -x "${OPENSSL_BIN}"
+"${OPENSSL_BIN}" version
+echo "[OK]"
+
+echo ""
+echo "[5/6] 原生 Demo 二进制..."
+if [ ! -x /usr/local/bin/tsa-demo ]; then
+    echo "[ERROR] /usr/local/bin/tsa-demo 不存在或不可执行"
     exit 1
 fi
-"${OPENSSL_BIN}" version
-# 确认 ts 子命令存在
-if ! "${OPENSSL_BIN}" ts -help >/dev/null 2>&1 && ! "${OPENSSL_BIN}" ts 2>&1 | head -1 | grep -qi ts; then
-    # openssl ts 无参数时通常打印 usage 并返回非 0，只要不是 command not found 即可
-    if ! "${OPENSSL_BIN}" help ts >/dev/null 2>&1; then
-        echo "[WARN] 无法确认 ts 子命令，继续启动（若签发失败请检查 Tongsuo 构建）"
-    fi
+# 无 JVM 探测
+if command -v java >/dev/null 2>&1; then
+    echo "[WARN] 镜像内意外发现 java，但 Demo 仍使用原生二进制"
+else
+    echo "[OK] 镜像内无 JVM (符合预期)"
 fi
-echo "[OK] 国密 OpenSSL 正常: ${OPENSSL_BIN}"
+ls -lh /usr/local/bin/tsa-demo
+echo "[OK] tsa-demo 原生二进制就绪"
 
 echo ""
-echo "[5/5] 启动 supervisord (chronyd + fcgiwrap + nginx)..."
+echo "[6/6] supervisord..."
 echo ""
 echo "============================================"
-echo "  服务已就绪"
+echo "  已就绪 (单镜像 / 无 JVM)"
 echo "============================================"
-echo "  HTTP:    http://0.0.0.0:80"
-echo "  HTTPS:   https://0.0.0.0:443"
-echo "  TSA:     POST /tsa"
-echo "  Health:  GET  /health"
-echo "  算法:    SM2 + SM3 (RFC 3161)"
-echo "  Crypto:  Tongsuo (${OPENSSL_BIN})"
-echo "  FastCGI: 127.0.0.1:9000 (内部)"
+echo "  TSA:      POST http://0.0.0.0:80/tsa"
+echo "  Demo API: http://0.0.0.0:80/api/...  (nginx→原生二进制)"
+echo "  Demo 直连:http://0.0.0.0:9090/api/..."
+echo "  Health:   GET  /health"
+echo "  Info:     GET  /info"
+echo "  二进制:   /usr/local/bin/tsa-demo"
+echo "  进程:     chronyd + fcgiwrap + nginx + tsa-demo"
 echo "============================================"
 echo ""
 

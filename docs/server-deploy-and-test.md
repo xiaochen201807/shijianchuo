@@ -1,12 +1,11 @@
 # All-in-One 镜像：服务器拉取部署与测试手册
 
-> **适用镜像**：`ghcr.io/xiaochen201807/shijianchuo/tsa`  
-> **架构**：`linux/amd64` + `linux/arm64`（`docker pull` 自动选择）  
-> **内含进程**：nginx + fcgiwrap + **Tongsuo(国密 OpenSSL)** + chrony（supervisor 托管）  
+> **适用镜像**：`ghcr.io/xiaochen201807/shijianchuo/tsa`（**唯一最终镜像**）  
+> **架构**：`linux/amd64` + `linux/arm64`  
+> **内含**：Tongsuo(TSA) + nginx + fcgiwrap + chrony + **`tsa-demo` 原生二进制（无 JVM）**  
 > **仓库**：https://github.com/xiaochen201807/shijianchuo  
 >
-> **说明**：GmSSL 3 的 `gmssl` 已无 `ecparam`/`req`/`ts` 等 OpenSSL 兼容命令，无法直接做 RFC 3161。  
-> 本镜像使用 **Tongsuo** 提供 SM2/SM3 与 `openssl ts -reply`。
+> 多阶段构建：GraalVM 编出 `tsa-demo` → 拷入运行时镜像，由 supervisor 与 TSA 一起运行。
 
 ---
 
@@ -121,6 +120,7 @@ services:
       # 宿主机端口:容器端口 — 可按需修改左侧
       - "${NGINX_HTTP_PORT:-8080}:80"
       - "${NGINX_HTTPS_PORT:-8443}:443"
+      - "${DEMO_PORT:-9090}:9090"
     volumes:
       - tsa-certs:/etc/tsa/certs          # SM2 CA/TSA 证书与私钥
       - tsa-data:/var/lib/tsa             # 序列号等数据
@@ -258,6 +258,9 @@ docker compose up -d
 | 健康检查 | `http://<服务器IP>:8080/health` |
 | 服务信息 | `http://<服务器IP>:8080/info` |
 | 时间戳请求 | `http://<服务器IP>:8080/tsa` |
+| **Demo API（原生二进制）** | `http://<服务器IP>:8080/api/...` 或 `:9090/api/...` |
+| SM3 示例 | `http://<服务器IP>:8080/api/sm3/hash?text=Hello` |
+| 时间戳示例 | `POST http://<服务器IP>:8080/api/tsa/timestamp/text` |
 | 下载 TSA 证书 | `http://<服务器IP>:8080/tsa/cert` |
 | 下载 CA 证书 | `http://<服务器IP>:8080/tsa/cacert` |
 | HTTPS | `https://<服务器IP>:8443/...`（默认自签 TLS，浏览器会告警） |
@@ -420,9 +423,14 @@ curl -sf "${SERVER}/tsa/cert"   -o /tmp/tsacert.pem
 curl -sf "${SERVER}/tsa/cacert" -o /tmp/tsacacert.pem
 test -s /tmp/tsacert.pem && test -s /tmp/tsacacert.pem && echo "  certs OK"
 
-echo "[4] container processes (optional, local docker only)"
+echo "[4] native demo API (no JVM)"
+curl -sf "${SERVER}/api/sm3/hash?text=Hello" | tee /tmp/sm3.json
+echo ""
+
+echo "[5] container processes (optional)"
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx tsa; then
   docker exec tsa supervisorctl status || true
+  docker exec tsa ls -lh /usr/local/bin/tsa-demo
 fi
 
 echo "Smoke test passed for ${SERVER}"

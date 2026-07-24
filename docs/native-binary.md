@@ -4,11 +4,17 @@
 
 | 模块 | 产物形态 | 是否需要 JVM | 说明 |
 |------|----------|--------------|------|
-| **sdk** (`tsa-spring-boot-starter`) | **JAR 库** | 使用方若是 Java 项目则需要 | Maven 依赖库，不能改成“一个二进制”给别人 import |
-| **sdk-demo** (`tsa-demo`) | **原生可执行文件** | **不需要** | GraalVM Native Image，可直接跑 / 打进无 JRE 镜像 |
+| **最终镜像** `.../tsa` | Docker 镜像 | **不需要** | **生产唯一入口**：内嵌 `tsa-demo` 原生二进制 + TSA 服务 |
+| **sdk** | JAR 库 | 作为依赖时 | 给其它 Java 项目 import |
+| **sdk-demo 源码** | 可编成原生文件 | 编完不需要 | 由 Dockerfile 多阶段编进最终镜像 |
 
-**TSA 服务端 All-in-One 镜像本身就不含 JVM**（Tongsuo + nginx + fcgiwrap + chrony）。  
-本说明只针对 **Java Demo / 客户端程序** 的发布形态。
+```text
+Dockerfile 多阶段:
+  [1] GraalVM  →  /usr/local/bin/tsa-demo  (原生)
+  [2] Ubuntu   →  Tongsuo + nginx + fcgiwrap + chrony
+                  + COPY tsa-demo
+                  + supervisor 一起启动
+```
 
 ---
 
