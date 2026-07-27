@@ -121,7 +121,7 @@ RUN mkdir -p \
         /opt/tsa-demo/config \
     && useradd -r -s /sbin/nologin fcgiwrap 2>/dev/null || true \
     && useradd -r -u 10001 -s /usr/sbin/nologin tsademo 2>/dev/null || true \
-    && chown -R fcgiwrap:fcgiwrap /var/www/tsa /var/lib/tsa /run/fcgiwrap \
+    && chown -R fcgiwrap:fcgiwrap /var/www/tsa /var/lib/tsa /var/log/tsa /run/fcgiwrap \
     && chmod -R 755 /etc/tsa
 
 # TSA 服务配置与脚本

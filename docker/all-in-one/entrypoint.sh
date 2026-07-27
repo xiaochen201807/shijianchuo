@@ -31,7 +31,7 @@ mkdir -p \
     /etc/tsa/certs /etc/nginx/tls /var/www/tsa /var/lib/tsa \
     /var/log/tsa /var/log/nginx /var/log/supervisor /var/log/chrony \
     /var/lib/chrony /run/fcgiwrap /run/chrony /run /opt/tsa-demo/config
-chown -R fcgiwrap:fcgiwrap /var/www/tsa /var/lib/tsa /run/fcgiwrap 2>/dev/null || true
+chown -R fcgiwrap:fcgiwrap /var/www/tsa /var/lib/tsa /var/log/tsa /run/fcgiwrap 2>/dev/null || true
 echo "[OK]"
 
 echo ""

@@ -33,8 +33,25 @@ commonName              = supplied
 emailAddress            = optional
 
 # --- TSA 配置 (openssl ts -reply -section tsa) ---
+# 注意: Tongsuo 使用 -section tsa 时，需在本段直接定义所有参数，
+#       不会自动跟随 default_tsa 指针到子段查找。
 [tsa]
 default_tsa = tsa_config1
+dir = /etc/tsa
+serial = $dir/certs/tsaserial
+crypto_device = builtin
+signer_cert = $dir/certs/tsacert.pem
+signer_key = $dir/certs/tsakey.pem
+certs = $dir/certs/cacert.pem
+default_policy = 1.2.3.4.1
+other_policies = 1.2.3.4.5
+digests = sm3, SM3, sha256, sha384, sha512
+accuracy = secs:1, millisecs:500, microsecs:0
+clock_precision_digits = 0
+ordering = yes
+tsa_name = yes
+ess_cert_id_chain = no
+signer_digest = sm3
 
 [tsa_config1]
 dir = /etc/tsa
