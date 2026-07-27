@@ -52,7 +52,7 @@ Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
 - 内存建议 ≥ 4GB（首次编译 GmSSL3 较慢）
 - JDK 21+、Maven 3.8+（仅 SDK / Demo 需要）
 
-### 2. 本地一键启动
+### 2. 本地一键启动 
 
 ```powershell
 cd M:\shijianchuo
