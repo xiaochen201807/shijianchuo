@@ -1,11 +1,11 @@
-package com.tsa.starter.aot;
+package com.shineyue.tsa.aot;
 
-import com.tsa.starter.TsaClient;
-import com.tsa.starter.TsaProperties;
-import com.tsa.starter.exception.TsaException;
-import com.tsa.starter.model.TimeStampResult;
-import com.tsa.starter.sm2.Sm2Util;
-import com.tsa.starter.sm3.Sm3Util;
+import com.shineyue.tsa.TsaClient;
+import com.shineyue.tsa.TsaProperties;
+import com.shineyue.tsa.exception.TsaException;
+import com.shineyue.tsa.model.TimeStampResult;
+import com.shineyue.tsa.sm2.Sm2Util;
+import com.shineyue.tsa.sm3.Sm3Util;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.aot.hint.MemberCategory;
 import org.springframework.aot.hint.RuntimeHints;

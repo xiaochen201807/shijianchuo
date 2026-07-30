@@ -1,5 +1,12 @@
 # ============================================================
-# TSA Server Dockerfile
+# [DEPRECATED] 此文件已废弃，仅供旧版多容器架构参考
+#
+# 当前架构已迁移至 All-in-One 单容器模式，请使用根目录 Dockerfile。
+# 根目录 Dockerfile 使用 Tongsuo (替代 GmSSL3) + nginx + fcgiwrap
+# + chrony + tsa-demo (GraalVM 原生二进制)，由 supervisor 托管。
+# ============================================================
+#
+# TSA Server Dockerfile (旧版)
 # 基于 Ubuntu 22.04 构建 GmSSL3 + fcgiwrap 时间戳服务
 # ============================================================
 

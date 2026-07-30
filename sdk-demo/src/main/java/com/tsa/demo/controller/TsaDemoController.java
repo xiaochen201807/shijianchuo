@@ -1,10 +1,11 @@
 package com.tsa.demo.controller;
 
-import com.tsa.starter.TsaClient;
-import com.tsa.starter.exception.TsaException;
-import com.tsa.starter.model.TimeStampResult;
-import com.tsa.starter.sm2.Sm2Util;
-import com.tsa.starter.sm3.Sm3Util;
+import com.shineyue.tsa.TsaClient;
+import com.shineyue.tsa.exception.TsaException;
+import com.shineyue.tsa.model.TimeStampResult;
+import com.shineyue.tsa.model.TimeStampVerifyResult;
+import com.shineyue.tsa.sm2.Sm2Util;
+import com.shineyue.tsa.sm3.Sm3Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,7 +15,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.cert.X509Certificate;
 import java.util.Base64;
+import java.util.Date;
 import java.util.Map;
 import java.util.LinkedHashMap;
 
@@ -37,6 +40,10 @@ import java.util.LinkedHashMap;
  * 3. TSA 时间戳请求测试
  *    POST /api/tsa/timestamp
  *    POST /api/tsa/timestamp/text
+ *    POST /api/tsa/timestamp/sm3
+ *
+ * 4. TSA 时间戳验证
+ *    POST /api/tsa/verify
  */
 @RestController
 @RequestMapping("/api")
@@ -379,6 +386,56 @@ public class TsaDemoController {
                     "error", e.getMessage(),
                     "errorCode", e.getErrorCode()
             ));
+        }
+    }
+
+    /**
+     * 验证时间戳令牌
+     *
+     * 请求体:
+     *   text: 原始文本 (必须)
+     *   responseBase64: /tsa/timestamp/text 返回的 responseBase64 字段 (必须)
+     *
+     * 自动从 Token 内部提取签名证书进行验证，无需调用方传入任何证书。
+     * 无论证书是否续期/更换，都能自动识别并验证。
+     *
+     * 验证内容:
+     *   1. 令牌签名是否有效 (使用 Token 内嵌的 TSA 证书)
+     *   2. 令牌中的摘要是否与原始文本的 SM3 摘要一致 (数据完整性)
+     */
+    @PostMapping("/tsa/verify")
+    public ResponseEntity<Map<String, Object>> verifyTimestamp(@RequestBody Map<String, String> body) {
+        String text = body.get("text");
+        String responseBase64 = body.get("responseBase64");
+        if (text == null || responseBase64 == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Missing required fields: text, responseBase64"));
+        }
+        try {
+            // 使用 SDK 的验证方法，自动从 Token 内部提取证书
+            TimeStampVerifyResult verifyResult = tsaClient.verifyTimestamp(text, responseBase64);
+
+            // 组装响应
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("valid", verifyResult.isValid());
+            result.put("signatureValid", verifyResult.isSignatureValid());
+            result.put("hashMatch", verifyResult.isHashMatch());
+            result.put("certSubject", verifyResult.getCertSubject());
+            result.put("certExpiry", verifyResult.getCertExpiry().toString());
+            result.put("expectedHashHex", verifyResult.getExpectedHashHex());
+            result.put("tokenHashHex", verifyResult.getTokenHashHex());
+            result.put("serialNumber", verifyResult.getSerialNumber());
+            result.put("genTime", verifyResult.getGenTime().toString());
+            result.put("policyOid", verifyResult.getPolicyOid());
+            result.put("input", text);
+
+            return ResponseEntity.ok(result);
+
+        } catch (TsaException e) {
+            logger.error("Timestamp verification failed", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            logger.error("Timestamp verification failed", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
 

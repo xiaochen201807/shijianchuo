@@ -1,6 +1,6 @@
-package com.tsa.starter;
+package com.shineyue.tsa;
 
-import com.tsa.starter.aot.TsaRuntimeHints;
+import com.shineyue.tsa.aot.TsaRuntimeHints;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;

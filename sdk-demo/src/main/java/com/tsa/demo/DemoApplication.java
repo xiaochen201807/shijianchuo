@@ -14,7 +14,7 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
  *   - 原生二进制:    mvn -pl sdk-demo -am -Pnative -DskipTests package
  *                    产物 sdk-demo/target/tsa-demo  (无 JVM)
  */
-@SpringBootApplication(scanBasePackages = {"com.tsa.demo", "com.tsa.starter"})
+@SpringBootApplication(scanBasePackages = {"com.tsa.demo", "com.shineyue.tsa"})
 @ConfigurationPropertiesScan
 public class DemoApplication {
 

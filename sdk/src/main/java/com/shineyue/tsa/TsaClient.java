@@ -1,9 +1,15 @@
-package com.tsa.starter;
+package com.shineyue.tsa;
 
-import com.tsa.starter.exception.TsaException;
-import com.tsa.starter.model.TimeStampResult;
-import com.tsa.starter.sm3.Sm3Util;
+import com.shineyue.tsa.exception.TsaException;
+import com.shineyue.tsa.model.TimeStampResult;
+import com.shineyue.tsa.model.TimeStampVerifyResult;
+import com.shineyue.tsa.sm3.Sm3Util;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cms.CMSSignedData;
+import org.bouncycastle.cms.SignerInformation;
+import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.tsp.TSPAlgorithms;
 import org.bouncycastle.tsp.TimeStampRequest;
@@ -25,6 +31,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.Security;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.Date;
 
 /**
@@ -191,7 +199,7 @@ public class TsaClient {
     // ================================================================
 
     /**
-     * 验证时间戳令牌
+     * 验证时间戳令牌（需要外部提供 TSA 证书）
      *
      * @param result   时间戳结果
      * @param tsaCert  TSA 签名证书
@@ -204,12 +212,10 @@ public class TsaClient {
         }
 
         try {
-            org.bouncycastle.cms.CMSSignedData cmsData = new org.bouncycastle.cms.CMSSignedData(result.getTimeStampToken());
+            CMSSignedData cmsData = new CMSSignedData(result.getTimeStampToken());
             TimeStampToken token = new TimeStampToken(cmsData);
 
-            // 验证签名 (需要将证书转换为 SignerInformationVerifier)
-            org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder verifierBuilder =
-                    new org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder();
+            JcaSimpleSignerInfoVerifierBuilder verifierBuilder = new JcaSimpleSignerInfoVerifierBuilder();
             verifierBuilder.setProvider("BC");
             token.validate(verifierBuilder.build(tsaCert));
 
@@ -222,6 +228,125 @@ public class TsaClient {
             logger.error("Timestamp verification failed", e);
             throw new TsaException("TSA_VERIFY_FAILED", "Timestamp verification failed", e);
         }
+    }
+
+    /**
+     * 验证时间戳令牌（自动从 Token 内部提取签名证书）
+     *
+     * 无需外部传入证书，自动从 Token 的 CMS SignedData 中提取签名者证书进行验证。
+     * 支持证书轮换/续期场景，因为验证使用的是 Token 内嵌的证书。
+     *
+     * @param data 原始数据（用于验证摘要是否匹配）
+     * @param responseDer 时间戳响应 DER 编码数据
+     * @return 验证结果，包含签名有效性、摘要匹配、证书信息等
+     * @throws TsaException 如果验证过程出错
+     */
+    public TimeStampVerifyResult verifyTimestamp(byte[] data, byte[] responseDer) throws TsaException {
+        if (data == null) {
+            throw new TsaException("TSA_DATA_NULL", "Input data cannot be null");
+        }
+        if (responseDer == null || responseDer.length == 0) {
+            throw new TsaException("TSA_RESPONSE_NULL", "Timestamp response data cannot be null or empty");
+        }
+
+        try {
+            // 1. 解析时间戳响应
+            TimeStampResponse tsResponse = new TimeStampResponse(responseDer);
+
+            // 2. 检查响应状态
+            int status = tsResponse.getStatus();
+            if (status != 0 && status != 1) {
+                throw new TsaException("TSA_REJECTED",
+                        "TSA response status: " + status + " - " + tsResponse.getStatusString());
+            }
+
+            TimeStampToken token = tsResponse.getTimeStampToken();
+            if (token == null) {
+                throw new TsaException("TSA_NO_TOKEN", "No timestamp token in response");
+            }
+
+            // 3. 从 Token 内部提取签名证书
+            CMSSignedData cmsData = new CMSSignedData(token.getEncoded());
+            SignerInformation signerInfo = cmsData.getSignerInfos().getSigners().iterator().next();
+            JcaSimpleSignerInfoVerifierBuilder certConverter = new JcaSimpleSignerInfoVerifierBuilder();
+            certConverter.setProvider("BC");
+
+            X509Certificate embeddedCert = null;
+            for (Object certObj : cmsData.getCertificates().getMatches(signerInfo.getSID())) {
+                if (certObj instanceof X509CertificateHolder) {
+                    embeddedCert = new JcaX509CertificateConverter()
+                            .setProvider("BC")
+                            .getCertificate((X509CertificateHolder) certObj);
+                    break;
+                }
+            }
+
+            if (embeddedCert == null) {
+                throw new TsaException("TSA_NO_SIGNER_CERT", "No signer certificate found in token");
+            }
+
+            // 4. 用 Token 内嵌证书验证签名
+            boolean signatureValid;
+            try {
+                JcaSimpleSignerInfoVerifierBuilder verifierBuilder = new JcaSimpleSignerInfoVerifierBuilder();
+                verifierBuilder.setProvider("BC");
+                token.validate(verifierBuilder.build(embeddedCert));
+                signatureValid = true;
+            } catch (Exception e) {
+                logger.warn("Token signature validation failed", e);
+                signatureValid = false;
+            }
+
+            // 5. 验证摘要是否匹配原始数据
+            byte[] expectedHash = Sm3Util.hash(data);
+            byte[] tokenHash = token.getTimeStampInfo().getMessageImprintDigest();
+            boolean hashMatch = Arrays.equals(expectedHash, tokenHash);
+
+            // 6. 提取证书信息
+            String certSubject = embeddedCert.getSubjectX500Principal().getName();
+            Date certExpiry = embeddedCert.getNotAfter();
+
+            // 7. 构建验证结果
+            return new TimeStampVerifyResult(
+                    signatureValid && hashMatch,
+                    signatureValid,
+                    hashMatch,
+                    certSubject,
+                    certExpiry,
+                    Sm3Util.toHex(expectedHash),
+                    Sm3Util.toHex(tokenHash),
+                    token.getTimeStampInfo().getSerialNumber().toString(16),
+                    token.getTimeStampInfo().getGenTime(),
+                    token.getTimeStampInfo().getPolicy() != null ? token.getTimeStampInfo().getPolicy().getId() : null
+            );
+
+        } catch (TsaException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("Timestamp verification failed", e);
+            throw new TsaException("TSA_VERIFY_FAILED", "Timestamp verification failed", e);
+        }
+    }
+
+    /**
+     * 验证时间戳令牌（字符串数据 + Base64 编码的响应）
+     *
+     * @param text 原始文本
+     * @param responseBase64 Base64 编码的时间戳响应
+     * @return 验证结果
+     * @throws TsaException 如果验证过程出错
+     */
+    public TimeStampVerifyResult verifyTimestamp(String text, String responseBase64) throws TsaException {
+        if (text == null) {
+            throw new TsaException("TSA_DATA_NULL", "Input text cannot be null");
+        }
+        if (responseBase64 == null || responseBase64.isEmpty()) {
+            throw new TsaException("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
+        }
+
+        byte[] data = text.getBytes(StandardCharsets.UTF_8);
+        byte[] responseDer = Base64.getDecoder().decode(responseBase64);
+        return verifyTimestamp(data, responseDer);
     }
 
     /**

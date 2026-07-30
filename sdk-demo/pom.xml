@@ -33,7 +33,7 @@
         </dependency>
 
         <dependency>
-            <groupId>com.tsa</groupId>
+            <groupId>com.shineyue.tsa</groupId>
             <artifactId>tsa-spring-boot-starter</artifactId>
             <version>1.0.0</version>
         </dependency>

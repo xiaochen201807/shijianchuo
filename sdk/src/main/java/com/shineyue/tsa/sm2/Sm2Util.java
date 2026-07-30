@@ -1,4 +1,4 @@
-package com.tsa.starter.sm2;
+package com.shineyue.tsa.sm2;
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair;
 import org.bouncycastle.crypto.CipherParameters;

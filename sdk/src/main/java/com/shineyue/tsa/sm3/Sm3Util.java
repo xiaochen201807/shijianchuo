@@ -1,4 +1,4 @@
-package com.tsa.starter.sm3;
+package com.shineyue.tsa.sm3;
 
 import org.bouncycastle.crypto.digests.SM3Digest;
 import org.bouncycastle.util.encoders.Hex;

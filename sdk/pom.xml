@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <!-- ==================== 项目基本信息 ==================== -->
-    <groupId>com.tsa</groupId>
+    <groupId>com.shineyue.tsa</groupId>
     <artifactId>tsa-spring-boot-starter</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>

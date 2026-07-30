@@ -1,4 +1,4 @@
-package com.tsa.starter.exception;
+package com.shineyue.tsa.exception;
 
 /**
  * TSA 操作异常

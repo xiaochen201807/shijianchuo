@@ -1,4 +1,4 @@
-package com.tsa.starter;
+package com.shineyue.tsa;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

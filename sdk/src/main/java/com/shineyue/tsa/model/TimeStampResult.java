@@ -1,4 +1,4 @@
-package com.tsa.starter.model;
+package com.shineyue.tsa.model;
 
 import java.math.BigInteger;
 import java.util.Base64;
