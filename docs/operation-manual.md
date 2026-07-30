@@ -877,7 +877,7 @@ mvn clean install -DskipTests
 
 ```xml
 <dependency>
-    <groupId>com.tsa</groupId>
+    <groupId>com.shineyue.tsa</groupId>
     <artifactId>tsa-spring-boot-starter</artifactId>
     <version>1.0.0</version>
 </dependency>
@@ -898,10 +898,22 @@ tsa:
   auto-register-provider: true       # 自动注册 BC Provider
 ```
 
+或使用 `application.properties` 格式:
+
+```properties
+tsa.url=http://localhost:8080/tsa
+tsa.connect-timeout=5000
+tsa.read-timeout=30000
+tsa.policy-oid=1.2.3.4.1
+tsa.cert-req=true
+tsa.hash-algorithm=SM3
+tsa.auto-register-provider=true
+```
+
 ### 11.3 SM3 使用示例
 
 ```java
-import com.tsa.starter.sm3.Sm3Util;
+import com.shineyue.tsa.sm3.Sm3Util;
 
 // 计算字符串的 SM3 摘要 (十六进制)
 String hash = Sm3Util.hashHex("Hello, TSA!");
@@ -924,7 +936,7 @@ try (InputStream is = new FileInputStream("large_file.pdf")) {
 ### 11.4 SM2 使用示例
 
 ```java
-import com.tsa.starter.sm2.Sm2Util;
+import com.shineyue.tsa.sm2.Sm2Util;
 import java.security.KeyPair;
 
 // 1. 生成 SM2 密钥对
@@ -958,9 +970,9 @@ PublicKey restoredPub = Sm2Util.publicKeyFromHex(pubHex);
 ### 11.5 TSA Client 使用示例
 
 ```java
-import com.tsa.starter.TsaClient;
-import com.tsa.starter.TsaProperties;
-import com.tsa.starter.model.TimeStampResult;
+import com.shineyue.tsa.TsaClient;
+import com.shineyue.tsa.TsaProperties;
+import com.shineyue.tsa.model.TimeStampResult;
 
 // 方式一: 手动创建
 TsaProperties props = new TsaProperties();

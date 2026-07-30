@@ -40,6 +40,18 @@ tsa:
   auto-register-provider: true       # 是否自动注册 BouncyCastle Provider
 ```
 
+或使用 `application.properties` 格式：
+
+```properties
+tsa.url=http://your-tsa-server/tsa
+tsa.connect-timeout=5000
+tsa.read-timeout=30000
+tsa.policy-oid=1.2.3.4.1
+tsa.cert-req=true
+tsa.hash-algorithm=SM3
+tsa.auto-register-provider=true
+```
+
 ### 2.2 基本使用
 
 ```java

@@ -29,7 +29,7 @@ Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
 │  nginx :80/:443                             │
 │      │ FastCGI 127.0.0.1:9000               │
 │      ▼                                      │
-│  fcgiwrap → tsa_cgi.sh → gmssl ts -reply    │
+│  fcgiwrap → tsa_cgi.sh → openssl ts -reply    │
 │  chronyd (NTP)                              │
 │  supervisor 进程托管                         │
 └─────────────────────────────────────────────┘
@@ -38,7 +38,7 @@ Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
 | 进程 | 职责 |
 |------|------|
 | **chronyd** | NTP 时间同步 |
-| **fcgiwrap** | 执行 CGI，调用 GmSSL3 签发 SM2/SM3 时间戳 |
+| **fcgiwrap** | 执行 CGI，调用 Tongsuo 签发 SM2/SM3 时间戳 |
 | **nginx** | HTTP/HTTPS 入口与证书下载 |
 | **sdk** | Spring Boot Starter：`TsaClient` + `Sm2Util` + `Sm3Util` |
 
@@ -49,7 +49,7 @@ Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
 ### 1. 环境要求
 
 - Docker 20.10+ / Docker Compose v2
-- 内存建议 ≥ 4GB（首次编译 GmSSL3 较慢）
+- 内存建议 ≥ 4GB（首次编译 Tongsuo 较慢）
 - JDK 21+、Maven 3.8+（仅 SDK / Demo 需要）
 
 ### 2. 本地一键启动  
@@ -62,7 +62,7 @@ curl http://localhost:8080/health
 curl http://localhost:8080/info
 ```
 
-首次构建约 **10–15 分钟**（编译 GmSSL3）。
+首次构建约 **10–15 分钟**（编译 Tongsuo）。
 
 ### 3. 拉取最终镜像（服务 + 原生 Demo，无 JVM）
 
@@ -101,7 +101,7 @@ shijianchuo/
 ├── docker/all-in-one/          # supervisor / nginx / chrony / 入口脚本
 ├── docker-compose.yml          # 本地构建并启动单容器
 ├── docker-compose.ghcr.yml     # 拉取 GHCR 镜像启动
-├── tsa-server/                 # CGI、证书脚本、GmSSL 配置（被 Dockerfile COPY）
+├── tsa-server/                 # CGI、证书脚本、Tongsuo 配置（被 Dockerfile COPY）
 ├── sdk/                        # Spring Boot Starter
 ├── sdk-demo/                   # REST 演示
 └── .github/workflows/          # 多架构构建推送 ghcr.io/.../tsa
@@ -141,7 +141,7 @@ TimeStampResult r = tsaClient.timestamp("Hello, TSA!");
 
 ```xml
 <dependency>
-  <groupId>com.tsa</groupId>
+  <groupId>com.shineyue.tsa</groupId>
   <artifactId>tsa-spring-boot-starter</artifactId>
   <version>1.0.0</version>
 </dependency>
@@ -167,9 +167,9 @@ docker buildx imagetools inspect ghcr.io/xiaochen201807/shijianchuo/tsa:latest
 
 ```powershell
 docker compose logs -f tsa
-docker exec tsa gmssl version
+docker exec tsa /usr/local/tongsuo/bin/openssl version
 docker exec tsa supervisorctl status
-docker exec tsa chronyc tracking
+docker exec tsa chronyc -h /run/chrony/chronyd.sock tracking
 docker compose down
 docker compose down -v   # 删除证书与数据卷
 ```
