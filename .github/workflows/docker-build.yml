@@ -47,6 +47,8 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
+  ALIYUN_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  ALIYUN_NAMESPACE: shinyue
   # 单镜像名
   IMAGE_NAME: tsa
 
@@ -57,6 +59,7 @@ jobs:
     outputs:
       push: ${{ steps.meta.outputs.push }}
       image: ${{ steps.meta.outputs.image }}
+      aliyun_image: ${{ steps.meta.outputs.aliyun_image }}
     steps:
       - name: Meta
         id: meta
@@ -64,7 +67,9 @@ jobs:
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           REPO=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
           IMAGE="ghcr.io/${OWNER}/${REPO}/${{ env.IMAGE_NAME }}"
+          ALIYUN_IMAGE="${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "aliyun_image=${ALIYUN_IMAGE}" >> "$GITHUB_OUTPUT"
 
           PUSH="false"
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -73,9 +78,10 @@ jobs:
             PUSH="true"
           fi
           echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
-          echo "Image: ${IMAGE}"
-          echo "Push:  ${PUSH}"
-          echo "Arch:  linux/amd64 + linux/arm64"
+          echo "GHCR Image:   ${IMAGE}"
+          echo "Aliyun Image: ${ALIYUN_IMAGE}"
+          echo "Push:         ${PUSH}"
+          echo "Arch:         linux/amd64 + linux/arm64"
 
   build:
     name: Build (${{ matrix.platform }})
@@ -116,11 +122,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Aliyun Registry
+        if: needs.prepare.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_REGISTRY_USER }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
       - name: Docker meta (labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ needs.prepare.outputs.image }}
+          images: |
+            ${{ needs.prepare.outputs.image }}
+            ${{ needs.prepare.outputs.aliyun_image }}
           labels: |
             org.opencontainers.image.title=tsa-all-in-one
             org.opencontainers.image.description=RFC 3161 GM TSA (GmSSL3 + nginx + fcgiwrap + chrony)
@@ -136,7 +152,7 @@ jobs:
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=RFC3161 GM TSA + native tsa-demo (no JVM)
-          outputs: ${{ needs.prepare.outputs.push == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', needs.prepare.outputs.image) || 'type=cacheonly' }}
+          outputs: ${{ needs.prepare.outputs.push == 'true' && format('type=image,"name={0},{1}",push-by-digest=true,name-canonical=true,push=true', needs.prepare.outputs.image, needs.prepare.outputs.aliyun_image) || 'type=cacheonly' }}
           cache-from: type=gha,scope=tsa-final-${{ steps.prep.outputs.platform_pair }}
           cache-to: type=gha,mode=max,scope=tsa-final-${{ steps.prep.outputs.platform_pair }}
           provenance: false
@@ -191,11 +207,33 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract tags
-        id: meta
+      - name: Log in to Aliyun Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_REGISTRY_USER }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
+      - name: Extract GHCR tags
+        id: meta_ghcr
         uses: docker/metadata-action@v5
         with:
           images: ${{ needs.prepare.outputs.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=build-${{ github.run_number }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Extract Aliyun tags
+        id: meta_aliyun
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ needs.prepare.outputs.aliyun_image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
@@ -210,39 +248,65 @@ jobs:
         working-directory: /tmp/digests
         run: |
           set -euo pipefail
+
+          # 1. GHCR Manifest
           IMAGE="${{ needs.prepare.outputs.image }}"
-          DIGEST_REFS=()
+          GHCR_DIGEST_REFS=()
           for f in *; do
             [ -f "$f" ] || continue
-            DIGEST_REFS+=("${IMAGE}@sha256:${f}")
+            GHCR_DIGEST_REFS+=("${IMAGE}@sha256:${f}")
           done
-          printf 'Refs:\n'; printf '  %s\n' "${DIGEST_REFS[@]}"
+          printf 'GHCR Digest Refs:\n'; printf '  %s\n' "${GHCR_DIGEST_REFS[@]}"
 
-          TAG_ARGS=()
+          GHCR_TAG_ARGS=()
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
-            TAG_ARGS+=("-t" "${tag}")
-          done <<< "${{ steps.meta.outputs.tags }}"
+            GHCR_TAG_ARGS+=("-t" "${tag}")
+          done <<< "${{ steps.meta_ghcr.outputs.tags }}"
 
-          docker buildx imagetools create "${TAG_ARGS[@]}" "${DIGEST_REFS[@]}"
+          echo "Creating GHCR multi-arch manifest..."
+          docker buildx imagetools create "${GHCR_TAG_ARGS[@]}" "${GHCR_DIGEST_REFS[@]}"
+
+          # 2. Aliyun Registry Manifest
+          ALIYUN_IMAGE="${{ needs.prepare.outputs.aliyun_image }}"
+          ALIYUN_DIGEST_REFS=()
+          for f in *; do
+            [ -f "$f" ] || continue
+            ALIYUN_DIGEST_REFS+=("${ALIYUN_IMAGE}@sha256:${f}")
+          done
+          printf 'Aliyun Digest Refs:\n'; printf '  %s\n' "${ALIYUN_DIGEST_REFS[@]}"
+
+          ALIYUN_TAG_ARGS=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            ALIYUN_TAG_ARGS+=("-t" "${tag}")
+          done <<< "${{ steps.meta_aliyun.outputs.tags }}"
+
+          echo "Creating Aliyun multi-arch manifest..."
+          docker buildx imagetools create "${ALIYUN_TAG_ARGS[@]}" "${ALIYUN_DIGEST_REFS[@]}"
 
       - name: Inspect
         run: |
-          FIRST=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
-          docker buildx imagetools inspect "${FIRST}" || true
+          FIRST_GHCR=$(echo "${{ steps.meta_ghcr.outputs.tags }}" | head -n1)
+          docker buildx imagetools inspect "${FIRST_GHCR}" || true
           {
             echo "## All-in-One multi-arch image"
             echo ""
-            echo "- **Image**: \`${{ needs.prepare.outputs.image }}\`"
+            echo "- **GHCR Image**: \`${{ needs.prepare.outputs.image }}\`"
+            echo "- **Aliyun Image**: \`${{ needs.prepare.outputs.aliyun_image }}\`"
             echo "- **Platforms**: \`linux/amd64\`, \`linux/arm64\`"
             echo "- **Contains**: GmSSL3 + nginx + fcgiwrap + chrony"
             echo "- **Tags**:"
             echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
+            echo "${{ steps.meta_ghcr.outputs.tags }}"
+            echo "${{ steps.meta_aliyun.outputs.tags }}"
             echo '```'
             echo ""
             echo '```bash'
+            echo "# GHCR"
             echo "docker pull ${{ needs.prepare.outputs.image }}:latest"
+            echo "# Aliyun"
+            echo "docker pull ${{ needs.prepare.outputs.aliyun_image }}:latest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -259,7 +323,8 @@ jobs:
             echo ""
             echo "| Item | Value |"
             echo "|------|-------|"
-            echo "| Image | \`${{ needs.prepare.outputs.image }}\` |"
+            echo "| GHCR Image | \`${{ needs.prepare.outputs.image }}\` |"
+            echo "| Aliyun Image | \`${{ needs.prepare.outputs.aliyun_image }}\` |"
             echo "| Platforms | amd64 + arm64 |"
             echo "| Push | \`${{ needs.prepare.outputs.push }}\` |"
             echo "| Build | \`${{ needs.build.result }}\` |"
