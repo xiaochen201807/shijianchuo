@@ -14,7 +14,7 @@ spring:
 # TSA SDK 配置
 # 环境变量覆盖示例: TSA_URL=http://192.168.1.10:8080/tsa
 tsa:
-  url: ${TSA_URL:http://10.99.6.113:33080/tsa}
+  url: ${TSA_URL:http://127.0.0.1:80/tsa}
   connect-timeout: ${TSA_CONNECT_TIMEOUT:5000}
   read-timeout: ${TSA_READ_TIMEOUT:30000}
   policy-oid: ${TSA_POLICY_OID:1.2.3.4.1}

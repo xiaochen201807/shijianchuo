@@ -4,6 +4,7 @@ import com.shineyue.tsa.TsaClient;
 import com.shineyue.tsa.TsaProperties;
 import com.shineyue.tsa.exception.TsaException;
 import com.shineyue.tsa.model.TimeStampResult;
+import com.shineyue.tsa.model.TimeStampVerifyResult;
 import com.shineyue.tsa.sm2.Sm2Util;
 import com.shineyue.tsa.sm3.Sm3Util;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -24,6 +25,7 @@ public class TsaRuntimeHints implements RuntimeHintsRegistrar {
         hints.reflection().registerType(TsaClient.class, all);
         hints.reflection().registerType(TsaProperties.class, all);
         hints.reflection().registerType(TimeStampResult.class, all);
+        hints.reflection().registerType(TimeStampVerifyResult.class, all);
         hints.reflection().registerType(TsaException.class, all);
         hints.reflection().registerType(Sm2Util.class, all);
         hints.reflection().registerType(Sm3Util.class, all);
@@ -46,6 +48,28 @@ public class TsaRuntimeHints implements RuntimeHintsRegistrar {
                 "org.bouncycastle.tsp.TimeStampToken", all);
         hints.reflection().registerTypeIfPresent(classLoader,
                 "org.bouncycastle.tsp.TimeStampTokenInfo", all);
+
+        // 验证所需: X.509 证书工厂 + CMS 签名验证
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.asymmetric.x509.CertificateFactory", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cert.jcajce.JcaX509CertificateConverter", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cert.jcajce.JcaSimpleSignerInfoVerifierBuilder", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cms.CMSSignedData", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cms.SignerInformation", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cms.SignerInformationStore", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cert.X509CertificateHolder", all);
+
+        // SM2 签名/密钥相关
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.asymmetric.sm2.SM2Signature", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.digest.SM3", all);
 
         // BC 资源 (算法配置等)
         hints.resources().registerPattern("org/bouncycastle/.*");
