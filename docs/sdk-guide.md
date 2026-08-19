@@ -106,6 +106,37 @@ public class YourService {
 }
 ```
 
+### 2.3 大文件流式验证
+
+对大文件打时间戳与验证都走 InputStream，全程无需把文件整体读入内存：
+
+```java
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+// 1. 对大文件打时间戳（流式 SM3 摘要，低内存）
+TimeStampResult result;
+try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
+    result = tsaClient.timestamp(in);
+}
+// 持久化保存完整响应 Base64（即"时间戳凭证"，也是日后验证的入参）
+String responseBase64 = result.getEncodedResponseBase64();
+System.out.println("序列号: " + result.getSerialNumberHex());
+System.out.println("生成时间: " + result.getGenTime());
+
+// 2. 日后验证：再次以流方式读同一文件，与凭证比对
+try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
+    TimeStampVerifyResult vr = tsaClient.verifyTimestamp(in, responseBase64);
+    System.out.println("验证通过: " + vr.isValid());
+    System.out.println("签名证书: " + vr.getCertSubject());
+    if (!vr.isValid()) {
+        System.out.println("签名有效: " + vr.isSignatureValid());
+        System.out.println("摘要匹配: " + vr.isHashMatch());
+    }
+}
+```
+
 ---
 
 ## 3. TsaClient API 参考
@@ -127,6 +158,8 @@ public class YourService {
 | `verifyTimestamp(TimeStampResult result, X509Certificate tsaCert)` | 时间戳结果 + 外部证书 | `boolean` | 使用外部证书验证（传统方式） |
 | `verifyTimestamp(byte[] data, byte[] responseDer)` | 原始数据 + DER 响应 | `TimeStampVerifyResult` | **自动提取证书验证**（推荐） |
 | `verifyTimestamp(String text, String responseBase64)` | 文本 + Base64 响应 | `TimeStampVerifyResult` | **自动提取证书验证**（便捷方法） |
+| `verifyTimestamp(InputStream inputStream, byte[] responseDer)` | 输入流 + DER 响应 | `TimeStampVerifyResult` | **流式验证**（大文件，低内存，不关闭流） |
+| `verifyTimestamp(InputStream inputStream, String responseBase64)` | 输入流 + Base64 响应 | `TimeStampVerifyResult` | **流式验证**（便捷，大文件） |
 
 > **推荐用法：** 使用 `verifyTimestamp(String text, String responseBase64)` 或 `verifyTimestamp(byte[] data, byte[] responseDer)`，无需外部传入证书，自动从 Token 内嵌的 CMS SignedData 中提取签名者证书进行验证。支持证书轮换/续期场景。
 

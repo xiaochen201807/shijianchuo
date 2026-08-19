@@ -245,6 +245,87 @@ public class TsaClient {
         if (data == null) {
             throw new TsaException("TSA_DATA_NULL", "Input data cannot be null");
         }
+        // 计算原始数据的 SM3 摘要，交给核心验证逻辑
+        byte[] expectedHash = Sm3Util.hash(data);
+        return verifyWithHash(expectedHash, responseDer);
+    }
+
+    /**
+     * 验证时间戳令牌（输入流数据 + DER 编码的响应）
+     *
+     * 流式计算 SM3 摘要，无需把大文件整体读入内存，适合对大文件做时间戳验证。
+     * 注意：本方法不会关闭传入的 InputStream，由调用方负责资源管理。
+     *
+     * @param inputStream 原始数据输入流
+     * @param responseDer 时间戳响应 DER 编码数据
+     * @return 验证结果，包含签名有效性、摘要匹配、证书信息等
+     * @throws TsaException 如果验证过程出错
+     */
+    public TimeStampVerifyResult verifyTimestamp(InputStream inputStream, byte[] responseDer) throws TsaException {
+        if (inputStream == null) {
+            throw new TsaException("TSA_DATA_NULL", "Input stream cannot be null");
+        }
+        byte[] expectedHash;
+        try {
+            expectedHash = Sm3Util.hash(inputStream);
+        } catch (IOException e) {
+            throw new TsaException("TSA_STREAM_ERROR", "Failed to read input stream", e);
+        }
+        return verifyWithHash(expectedHash, responseDer);
+    }
+
+    /**
+     * 验证时间戳令牌（字符串数据 + Base64 编码的响应）
+     *
+     * @param text 原始文本
+     * @param responseBase64 Base64 编码的时间戳响应
+     * @return 验证结果
+     * @throws TsaException 如果验证过程出错
+     */
+    public TimeStampVerifyResult verifyTimestamp(String text, String responseBase64) throws TsaException {
+        if (text == null) {
+            throw new TsaException("TSA_DATA_NULL", "Input text cannot be null");
+        }
+        if (responseBase64 == null || responseBase64.isEmpty()) {
+            throw new TsaException("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
+        }
+        byte[] expectedHash = Sm3Util.hash(text.getBytes(StandardCharsets.UTF_8));
+        byte[] responseDer = Base64.getDecoder().decode(responseBase64);
+        return verifyWithHash(expectedHash, responseDer);
+    }
+
+    /**
+     * 验证时间戳令牌（输入流数据 + Base64 编码的响应）
+     *
+     * 流式计算 SM3 摘要，适合对大文件做时间戳验证。本方法不会关闭传入的 InputStream。
+     *
+     * @param inputStream 原始数据输入流
+     * @param responseBase64 Base64 编码的时间戳响应
+     * @return 验证结果
+     * @throws TsaException 如果验证过程出错
+     */
+    public TimeStampVerifyResult verifyTimestamp(InputStream inputStream, String responseBase64) throws TsaException {
+        if (responseBase64 == null || responseBase64.isEmpty()) {
+            throw new TsaException("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
+        }
+        byte[] responseDer = Base64.getDecoder().decode(responseBase64);
+        return verifyTimestamp(inputStream, responseDer);
+    }
+
+    /**
+     * 核心验证逻辑：用预先计算的摘要 + 时间戳响应做完整验证。
+     * 解析响应、检查状态、提取 Token 内嵌证书验签、比对摘要，构建结果。
+     * 所有公开 verifyTimestamp(InputStream/byte[]/String, ...) 重载最终都委托到这里。
+     *
+     * @param expectedHash 原始数据已计算出的 SM3 摘要
+     * @param responseDer 时间戳响应 DER 编码数据
+     * @return 验证结果
+     * @throws TsaException 如果验证过程出错
+     */
+    private TimeStampVerifyResult verifyWithHash(byte[] expectedHash, byte[] responseDer) throws TsaException {
+        if (expectedHash == null || expectedHash.length == 0) {
+            throw new TsaException("TSA_HASH_EMPTY", "Hash value cannot be null or empty");
+        }
         if (responseDer == null || responseDer.length == 0) {
             throw new TsaException("TSA_RESPONSE_NULL", "Timestamp response data cannot be null or empty");
         }
@@ -298,7 +379,6 @@ public class TsaClient {
             }
 
             // 5. 验证摘要是否匹配原始数据
-            byte[] expectedHash = Sm3Util.hash(data);
             byte[] tokenHash = token.getTimeStampInfo().getMessageImprintDigest();
             boolean hashMatch = Arrays.equals(expectedHash, tokenHash);
 
@@ -326,27 +406,6 @@ public class TsaClient {
             logger.error("Timestamp verification failed", e);
             throw new TsaException("TSA_VERIFY_FAILED", "Timestamp verification failed", e);
         }
-    }
-
-    /**
-     * 验证时间戳令牌（字符串数据 + Base64 编码的响应）
-     *
-     * @param text 原始文本
-     * @param responseBase64 Base64 编码的时间戳响应
-     * @return 验证结果
-     * @throws TsaException 如果验证过程出错
-     */
-    public TimeStampVerifyResult verifyTimestamp(String text, String responseBase64) throws TsaException {
-        if (text == null) {
-            throw new TsaException("TSA_DATA_NULL", "Input text cannot be null");
-        }
-        if (responseBase64 == null || responseBase64.isEmpty()) {
-            throw new TsaException("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
-        }
-
-        byte[] data = text.getBytes(StandardCharsets.UTF_8);
-        byte[] responseDer = Base64.getDecoder().decode(responseBase64);
-        return verifyTimestamp(data, responseDer);
     }
 
     /**

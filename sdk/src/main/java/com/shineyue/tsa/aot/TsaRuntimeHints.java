@@ -38,6 +38,12 @@ public class TsaRuntimeHints implements RuntimeHintsRegistrar {
                 "org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPrivateKey", all);
         hints.reflection().registerTypeIfPresent(classLoader,
                 "org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPublicKey", all);
+        // EC KeyFactory: loadPrivateKey / Sm2Util 通过 KeyFactory.getInstance("EC", "BC") 解析密钥
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.asymmetric.ec.KeyFactorySpi$EC", all);
+        // EC KeyPairGenerator: Sm2Util.generateKeyPair 通过 KeyPairGenerator.getInstance("EC", "BC") 生成密钥对
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.asymmetric.ec.KeyPairGeneratorSpi$EC", all);
         hints.reflection().registerTypeIfPresent(classLoader,
                 "org.bouncycastle.jcajce.provider.digest.SM3$Digest", all);
         hints.reflection().registerTypeIfPresent(classLoader,
@@ -67,9 +73,16 @@ public class TsaRuntimeHints implements RuntimeHintsRegistrar {
         hints.reflection().registerTypeIfPresent(classLoader,
                 "org.bouncycastle.cert.X509CertificateHolder", all);
 
-        // SM2 签名/密钥相关
+        // SM2 签名 SPI (BC 1.81: 位于 asymmetric.ec 包, 类名 GMSignatureSpi)
+        // TsaSigner 构造器通过 JcaSimpleSignerInfoGeneratorBuilder.build("SM3withSM2", ...) 触发
+        // Signature.getInstance("SM3withSM2", "BC") -> GMSignatureSpi$sm3WithSM2
         hints.reflection().registerTypeIfPresent(classLoader,
-                "org.bouncycastle.jcajce.provider.asymmetric.sm2.SM2Signature", all);
+                "org.bouncycastle.jcajce.provider.asymmetric.ec.GMSignatureSpi", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.asymmetric.ec.GMSignatureSpi$sm3WithSM2", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.asymmetric.ec.GMSignatureSpi$sha256WithSM2", all);
+        // SM3 摘要算法主类 (MessageDigest.getInstance("SM3", "BC") 依赖)
         hints.reflection().registerTypeIfPresent(classLoader,
                 "org.bouncycastle.jcajce.provider.digest.SM3", all);
 
