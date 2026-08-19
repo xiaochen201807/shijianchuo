@@ -193,8 +193,6 @@ echo "--- 步骤 4: 权限 ---"
 chmod 600 "${CERT_DIR}/cakey.pem" "${CERT_DIR}/tsakey.pem"
 chmod 644 "${CERT_DIR}/cacert.pem" "${CERT_DIR}/tsacert.pem"
 chmod 644 "${CERT_DIR}/tsaserial" "${CERT_DIR}/caserial.srl" 2>/dev/null || true
-# fcgiwrap 需要读写序列号
-chown -R fcgiwrap:fcgiwrap "${CERT_DIR}" 2>/dev/null || true
 chmod 775 "${CERT_DIR}" 2>/dev/null || true
 chmod 664 "${CERT_DIR}/tsaserial" 2>/dev/null || true
 

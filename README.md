@@ -2,14 +2,14 @@
 
 自建 **RFC 3161** 合规时间戳授权机构（TSA），支持 **SM2 / SM3 国密算法**。
 
-**最终唯一镜像** `ghcr.io/xiaochen201807/shijianchuo/tsa`：
+**最终唯一镜像** `ghcr.io/<owner>/<repo>/tsa`（`<owner>/<repo>` 为本仓库实际路径，如 `xiaochen201807/shijianchuo`）：
 
 ```text
-Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
+tsa-server-java (BouncyCastle SM3withSM2 原生二进制) + nginx + chrony
         + tsa-demo 原生二进制 (GraalVM，无 JVM)
 ```
 
-多阶段构建：先编出 `tsa-demo`，再打进运行时镜像，由 **supervisor 一起拉起**。  
+多阶段构建：先编出 `tsa-server-java` 与 `tsa-demo` 原生二进制，再打进运行时镜像，由 **supervisor 一起拉起**。  
 对外：`/tsa` 时间戳，`/api/*` 为 Demo REST（反代到原生进程）。
 
 > - 完整操作手册：[`docs/operation-manual.md`](docs/operation-manual.md)  
@@ -27,9 +27,9 @@ Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
 │  单个容器 tsa (All-in-One)                   │
 │                                             │
 │  nginx :80/:443                             │
-│      │ FastCGI 127.0.0.1:9000               │
+│      │ proxy_pass 127.0.0.1:9001               │
 │      ▼                                      │
-│  fcgiwrap → tsa_cgi.sh → openssl ts -reply    │
+│  tsa-server-java (BouncyCastle SM3withSM2)    │
 │  chronyd (NTP)                              │
 │  supervisor 进程托管                         │
 └─────────────────────────────────────────────┘
@@ -38,7 +38,7 @@ Tongsuo(RFC3161 TSA) + nginx + fcgiwrap + chrony
 | 进程 | 职责 |
 |------|------|
 | **chronyd** | NTP 时间同步 |
-| **fcgiwrap** | 执行 CGI，调用 Tongsuo 签发 SM2/SM3 时间戳 |
+| **tsa-server-java** | RFC 3161 签名（BouncyCastle SM3withSM2，原生二进制无 JVM） |
 | **nginx** | HTTP/HTTPS 入口与证书下载 |
 | **sdk** | Spring Boot Starter：`TsaClient` + `Sm2Util` + `Sm3Util` |
 
@@ -67,7 +67,7 @@ curl http://localhost:8080/info
 ### 3. 拉取最终镜像（服务 + 原生 Demo，无 JVM）
 
 ```bash
-docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest
+docker pull ghcr.io/<owner>/<repo>/tsa:latest
 docker compose -f docker-compose.ghcr.yml up -d
 
 curl http://localhost:8080/health
@@ -101,7 +101,8 @@ shijianchuo/
 ├── docker/all-in-one/          # supervisor / nginx / chrony / 入口脚本
 ├── docker-compose.yml          # 本地构建并启动单容器
 ├── docker-compose.ghcr.yml     # 拉取 GHCR 镜像启动
-├── tsa-server/                 # CGI、证书脚本、Tongsuo 配置（被 Dockerfile COPY）
+├── tsa-server/                 # 证书脚本、Tongsuo TSA 配置（被 Dockerfile COPY）
+├── tsa-server-java/             # Java TSA 签名服务（GraalVM 原生二进制，无 JVM）
 ├── sdk/                        # Spring Boot Starter
 ├── sdk-demo/                   # REST 演示
 └── .github/workflows/          # 多架构构建推送 ghcr.io/.../tsa
@@ -157,8 +158,8 @@ TimeStampResult r = tsaClient.timestamp("Hello, TSA!");
 | **Maven CI** | 仅校验 SDK **库 jar** 编译（给其它 Java 项目依赖，不发布运行镜像） |
 
 ```bash
-docker pull ghcr.io/xiaochen201807/shijianchuo/tsa:latest
-docker buildx imagetools inspect ghcr.io/xiaochen201807/shijianchuo/tsa:latest
+docker pull ghcr.io/<owner>/<repo>/tsa:latest
+docker buildx imagetools inspect ghcr.io/<owner>/<repo>/tsa:latest
 ```
 
 ---

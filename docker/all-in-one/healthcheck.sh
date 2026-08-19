@@ -1,5 +1,5 @@
 #!/bin/bash
-# 最终镜像健康检查: TSA nginx + 原生 Demo
+# 最终镜像健康检查: tsa-server-java + nginx + 原生 Demo
 
 set -e
 
@@ -8,8 +8,8 @@ if [ ! -f /etc/tsa/certs/tsacert.pem ] || [ ! -f /etc/tsa/certs/tsakey.pem ]; th
     exit 1
 fi
 
-if ! pgrep -f fcgiwrap >/dev/null 2>&1; then
-    echo "fcgiwrap not running"
+if ! pgrep -f tsa-server-java >/dev/null 2>&1; then
+    echo "tsa-server-java not running"
     exit 1
 fi
 

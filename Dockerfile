@@ -1,20 +1,20 @@
 # ============================================================
-# RFC 3161 国密 TSA — 最终 All-in-One 镜像 (唯一发布镜像)
+# RFC 3161 国密 TSA — All-in-One 镜像 (Java TSA Server 高性能版)
 #
 # 多阶段构建:
-#   1) GraalVM Native Image  →  tsa-demo 原生二进制 (无 JVM)
-#   2) Ubuntu 运行时         →  Tongsuo + nginx + fcgiwrap + chrony
-#                              + 拷贝 tsa-demo，由 supervisor 托管
+#   1) GraalVM Native Image  →  tsa-demo + tsa-server-java 原生二进制
+#   2) Ubuntu 运行时         →  Tongsuo + nginx + chrony
+#                              + tsa-server-java + tsa-demo (supervisor 托管)
 #
 # 对外:
-#   :80/:443  RFC 3161 /tsa  +  /api/* (反代到原生 Demo)
+#   :80/:443  RFC 3161 /tsa (Java TSA) + /api/* (反代到 Demo)
 #   :9090     Demo REST 直连
 #
 # 镜像: ghcr.io/<owner>/<repo>/tsa:latest
 # ============================================================
 
 # ------------------------------------------------------------
-# 阶段 1: 编译 tsa-demo 原生二进制 (无 JVM)
+# 阶段 1: GraalVM Native Image 编译 (tsa-demo + tsa-server-java)
 # ------------------------------------------------------------
 FROM ghcr.io/graalvm/native-image-community:21-ol9 AS native-demo
 
@@ -32,15 +32,18 @@ ENV MAVEN_OPTS="-Xmx4g"
 COPY pom.xml ./
 COPY sdk ./sdk
 COPY sdk-demo ./sdk-demo
+COPY tsa-server-java ./tsa-server-java
 
 RUN mvn -B -f pom.xml -pl sdk -am clean install -DskipTests \
     && mvn -B -f pom.xml -pl sdk-demo -am -Pnative -DskipTests package \
+    && mvn -B -f pom.xml -pl tsa-server-java -am -Pnative -DskipTests package \
     && test -x sdk-demo/target/tsa-demo \
-    && ls -lh sdk-demo/target/tsa-demo \
-    && file sdk-demo/target/tsa-demo || true
+    && test -x tsa-server-java/target/tsa-server-java \
+    && ls -lh sdk-demo/target/tsa-demo tsa-server-java/target/tsa-server-java \
+    && (file sdk-demo/target/tsa-demo tsa-server-java/target/tsa-server-java || true)
 
 # ------------------------------------------------------------
-# 阶段 2: 运行时 (Tongsuo TSA + 原生 Demo)
+# 阶段 2: 运行时 (Tongsuo 证书 + nginx + Java TSA + 原生 Demo)
 # ------------------------------------------------------------
 FROM ubuntu:22.04
 
@@ -61,9 +64,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         ca-certificates \
         curl \
-        fcgiwrap \
-        spawn-fcgi \
-        libfcgi-dev \
         nginx \
         chrony \
         supervisor \
@@ -115,20 +115,16 @@ RUN mkdir -p \
         /var/log/supervisor \
         /var/log/chrony \
         /var/lib/chrony \
-        /run/fcgiwrap \
         /run/chrony \
         /scripts \
         /opt/tsa-demo/config \
-    && useradd -r -s /sbin/nologin fcgiwrap 2>/dev/null || true \
     && useradd -r -u 10001 -s /usr/sbin/nologin tsademo 2>/dev/null || true \
-    && chown -R fcgiwrap:fcgiwrap /var/www/tsa /var/lib/tsa /var/log/tsa /run/fcgiwrap \
     && chmod -R 755 /etc/tsa
 
 # TSA 服务配置与脚本
 COPY tsa-server/config/tsa.cnf /etc/tsa/openssl/tsa.cnf
 COPY tsa-server/config/tsa_ext.cnf /etc/tsa/openssl/tsa_ext.cnf
 COPY tsa-server/scripts/generate_certs.sh /scripts/generate_certs.sh
-COPY tsa-server/scripts/tsa_cgi.sh /var/www/tsa/tsa_cgi.sh
 
 COPY docker/all-in-one/nginx.conf /etc/nginx/nginx.conf
 COPY docker/all-in-one/chrony.conf /etc/chrony/chrony.conf
@@ -149,6 +145,7 @@ RUN chmod +x /scripts/openssl-env.sh \
 
 # ★ 从阶段 1 拷贝原生二进制 (无 JVM)
 COPY --from=native-demo /src/sdk-demo/target/tsa-demo /usr/local/bin/tsa-demo
+COPY --from=native-demo /src/tsa-server-java/target/tsa-server-java /usr/local/bin/tsa-server-java
 COPY sdk-demo/src/main/resources/application.yml /opt/tsa-demo/config/application.yml
 
 RUN chmod +x \
@@ -156,8 +153,8 @@ RUN chmod +x \
         /scripts/generate_tls_certs.sh \
         /scripts/entrypoint.sh \
         /scripts/healthcheck.sh \
-        /var/www/tsa/tsa_cgi.sh \
         /usr/local/bin/tsa-demo \
+        /usr/local/bin/tsa-server-java \
     && chown -R tsademo:tsademo /opt/tsa-demo
 
 # 80/443: nginx (TSA + /api 反代)  9090: Demo 直连

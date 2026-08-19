@@ -1,0 +1,29 @@
+server:
+  port: 9001
+
+spring:
+  application:
+    name: tsa-server-java
+  main:
+    banner-mode: off
+
+# TSA 签名配置
+tsa:
+  enabled: false  # 禁用 TsaClient 自动配置 (本模块是 TSA 服务端，不需要 TsaClient)
+  server:
+    cert-path: /etc/tsa/certs/tsacert.pem
+    key-path: /etc/tsa/certs/tsakey.pem
+    chain-cert-path: /etc/tsa/certs/cacert.pem
+    #cert-path: temp/tsacert.pem
+    #key-path: temp/tsakey.pem
+    #chain-cert-path: temp/cacert.pem # CA 证书，嵌入到响应中供客户端验证
+    policy-oid: 1.2.3.4.1
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.tsa.server: INFO
+    com.shineyue.tsa: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

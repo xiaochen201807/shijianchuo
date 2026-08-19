@@ -14,6 +14,7 @@ on:
       - "Dockerfile"
       - "docker/**"
       - "tsa-server/**"
+      - "tsa-server-java/**"
       - "sdk/**"
       - "sdk-demo/**"
       - "pom.xml"
@@ -25,6 +26,7 @@ on:
       - "Dockerfile"
       - "docker/**"
       - "tsa-server/**"
+      - "tsa-server-java/**"
       - "sdk/**"
       - "sdk-demo/**"
       - "pom.xml"
@@ -139,7 +141,7 @@ jobs:
             ${{ needs.prepare.outputs.aliyun_image }}
           labels: |
             org.opencontainers.image.title=tsa-all-in-one
-            org.opencontainers.image.description=RFC 3161 GM TSA (GmSSL3 + nginx + fcgiwrap + chrony)
+            org.opencontainers.image.description=RFC 3161 GM TSA (tsa-server-java + nginx + chrony, no JVM)
 
       - name: Build and push by digest
         id: build
@@ -295,7 +297,7 @@ jobs:
             echo "- **GHCR Image**: \`${{ needs.prepare.outputs.image }}\`"
             echo "- **Aliyun Image**: \`${{ needs.prepare.outputs.aliyun_image }}\`"
             echo "- **Platforms**: \`linux/amd64\`, \`linux/arm64\`"
-            echo "- **Contains**: GmSSL3 + nginx + fcgiwrap + chrony"
+            echo "- **Contains**: tsa-server-java + nginx + chrony + tsa-demo (no JVM)"
             echo "- **Tags**:"
             echo '```'
             echo "${{ steps.meta_ghcr.outputs.tags }}"

@@ -5,12 +5,13 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.tsa</groupId>
-    <artifactId>tsa-demo</artifactId>
+    <artifactId>tsa-server-java</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
-    <name>TSA SDK Demo Application</name>
+    <name>TSA Java Server</name>
     <description>
-        Demo REST API. 默认可打 jar；使用 -Pnative 生成无 JVM 原生二进制 (GraalVM Native Image)。
+        RFC 3161 TSA Server - 高性能 Java 实现，替代 CGI 方案。
+        使用 BouncyCastle SM3withSM2 直接签名，无 fork 开销。
     </description>
 
     <parent>
@@ -22,8 +23,7 @@
 
     <properties>
         <java.version>21</java.version>
-        <!-- 原生可执行文件名 -->
-        <native.image.name>tsa-demo</native.image.name>
+        <native.image.name>tsa-server-java</native.image.name>
     </properties>
 
     <dependencies>
@@ -54,12 +54,6 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>
@@ -77,18 +71,15 @@
                     </excludes>
                 </configuration>
             </plugin>
-            <!-- 声明 native 插件，实际编译由 -Pnative 触发 -->
             <plugin>
                 <groupId>org.graalvm.buildtools</groupId>
                 <artifactId>native-maven-plugin</artifactId>
                 <configuration>
                     <imageName>${native.image.name}</imageName>
-                    <mainClass>com.tsa.demo.DemoApplication</mainClass>
+                    <mainClass>com.tsa.server.TsaServerApplication</mainClass>
                     <buildArgs>
                         <buildArg>--no-fallback</buildArg>
                         <buildArg>-H:+ReportExceptionStackTraces</buildArg>
-                        <!-- 减小体积、便于容器分发 -->
-                        <buildArg>--enable-url-protocols=http,https</buildArg>
                         <buildArg>-H:+AddAllCharsets</buildArg>
                     </buildArgs>
                 </configuration>
@@ -96,10 +87,6 @@
         </plugins>
     </build>
 
-    <!-- ============================================================
-         原生二进制: mvn -Pnative -DskipTests package
-         产物: sdk-demo/target/tsa-demo  (无 JVM 可执行文件)
-         ============================================================ -->
     <profiles>
         <profile>
             <id>native</id>

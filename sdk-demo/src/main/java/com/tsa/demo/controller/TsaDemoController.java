@@ -413,7 +413,6 @@ public class TsaDemoController {
         try {
             // 使用 SDK 的验证方法，自动从 Token 内部提取证书
             TimeStampVerifyResult verifyResult = tsaClient.verifyTimestamp(text, responseBase64);
-
             // 组装响应
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("valid", verifyResult.isValid());
@@ -427,9 +426,7 @@ public class TsaDemoController {
             result.put("genTime", verifyResult.getGenTime().toString());
             result.put("policyOid", verifyResult.getPolicyOid());
             result.put("input", text);
-
             return ResponseEntity.ok(result);
-
         } catch (TsaException e) {
             logger.error("Timestamp verification failed", e);
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));

@@ -2,6 +2,7 @@ package com.shineyue.tsa.aot;
 
 import com.shineyue.tsa.TsaClient;
 import com.shineyue.tsa.TsaProperties;
+import com.shineyue.tsa.TsaSigner;
 import com.shineyue.tsa.exception.TsaException;
 import com.shineyue.tsa.model.TimeStampResult;
 import com.shineyue.tsa.model.TimeStampVerifyResult;
@@ -29,6 +30,7 @@ public class TsaRuntimeHints implements RuntimeHintsRegistrar {
         hints.reflection().registerType(TsaException.class, all);
         hints.reflection().registerType(Sm2Util.class, all);
         hints.reflection().registerType(Sm3Util.class, all);
+        hints.reflection().registerType(TsaSigner.class, all);
 
         // BouncyCastle Provider / 常用类型
         hints.reflection().registerType(BouncyCastleProvider.class, all);
@@ -70,6 +72,28 @@ public class TsaRuntimeHints implements RuntimeHintsRegistrar {
                 "org.bouncycastle.jcajce.provider.asymmetric.sm2.SM2Signature", all);
         hints.reflection().registerTypeIfPresent(classLoader,
                 "org.bouncycastle.jcajce.provider.digest.SM3", all);
+
+        // 摘要算法 (验证时需要)
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.digest.SHA256$Digest", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.digest.SHA384$Digest", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.digest.SHA512$Digest", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.digest.SHA1$Digest", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.digest.MD5$Digest", all);
+
+        // 签名所需: CMS 签名器生成 + TSP 令牌生成
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoGeneratorBuilder", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cms.DefaultSignedAttributeTableGenerator", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.tsp.TimeStampTokenGenerator", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.cert.jcajce.JcaCertStore", all);
 
         // BC 资源 (算法配置等)
         hints.resources().registerPattern("org/bouncycastle/.*");

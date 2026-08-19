@@ -9,11 +9,12 @@
     <version>1.0.0</version>
     <packaging>pom</packaging>
     <name>RFC 3161 GM TSA Parent</name>
-    <description>RFC 3161 国密 TSA 工程父 POM (GmSSL3 + nginx + fcgiwrap + chrony + Spring Boot SDK)</description>
+    <description>RFC 3161 国密 TSA 工程父 POM (Tongsuo + nginx + Java TSA Server + chrony + Spring Boot SDK)</description>
 
     <modules>
         <module>sdk</module>
         <module>sdk-demo</module>
+        <module>tsa-server-java</module>
     </modules>
 
     <properties>

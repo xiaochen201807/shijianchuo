@@ -17,7 +17,7 @@ TSA Spring Boot Starter 是一个基于 RFC 3161 时间戳协议的 Spring Boot 
 <dependency>
     <groupId>com.shineyue.tsa</groupId>
     <artifactId>tsa-spring-boot-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 </dependency>
 ```
 
@@ -69,24 +69,37 @@ public class YourService {
     // 对字符串打时间戳
     public void timestampText() {
         TimeStampResult result = tsaClient.timestamp("Hello, 国密时间戳!");
+
+        // 序列号：TSA 为本次请求分配的唯一序号（十六进制），用于事后追溯
         System.out.println("序列号: " + result.getSerialNumberHex());
+
+        // 生成时间：TSA 对本时间戳签名的 UTC 时刻（服务端 chrony/NTP 同步，作为可信时间凭证）
         System.out.println("生成时间: " + result.getGenTime());
-        System.out.println("Token (Base64): " + result.getTimeStampTokenBase64());
+
+        // 时间戳响应（RFC 3161 TimeStampResp 的 Base64）：
+        //   完整响应 = 状态(status) + 时间戳令牌(TimeStampToken)。令牌内含被盖戳的原始摘要、
+        //   生成时间、序列号、策略 OID，以及 TSA 的 SM2 数字签名与签名者证书(cert-req=true 时附带)。
+        //   这是要持久化保存的"时间戳凭证"，也是下方 verifyTimestamp(text, responseBase64) 的入参。
+        System.out.println("响应 (Base64): " + result.getEncodedResponseBase64());
     }
 
     // 验证时间戳
     public void verifyTimestamp() {
         String text = "Hello, 国密时间戳!";
-        String responseBase64 = "..."; // 之前获取的 responseBase64
+        String responseBase64 = "..."; // 即上面 timestampText() 打印的"响应 (Base64)"
         
         TimeStampVerifyResult result = tsaClient.verifyTimestamp(text, responseBase64);
         
+        // isValid()：签名有效 且 摘要匹配，二者都成立才算通过
         if (result.isValid()) {
             System.out.println("验证通过");
+            // 签名证书主题：从 Token 内嵌 CMS 中自动提取的 TSA 证书 DN（CN/O）
             System.out.println("签名证书: " + result.getCertSubject());
         } else {
             System.out.println("验证失败");
+            // 签名有效：TSA 的 SM2 签名是否能用其证书公钥验签通过
             System.out.println("签名有效: " + result.isSignatureValid());
+            // 摘要匹配：把原文重新做 SM3 后，与 Token 内记录的摘要是否一致（防原文被篡改）
             System.out.println("摘要匹配: " + result.isHashMatch());
         }
     }
@@ -216,12 +229,39 @@ byte[] decrypted = Sm2Util.decrypt(ciphertext, privateKey);
 | 方法 | 说明 |
 |------|------|
 | `generateKeyPair()` | 生成 SM2 密钥对（JCA） |
-| `generateKeyPairBc()` | 生成 SM2 密钥对（BouncyCastle） |
+| `generateKeyPairBc()` | 生成 SM2 密钥对（BouncyCastle 底层 API） |
 | `sign(byte[] data, PrivateKey privateKey)` | 签名（默认用户 ID） |
 | `sign(byte[] data, PrivateKey privateKey, byte[] userId)` | 签名（指定用户 ID） |
-| `verify(byte[] data, byte[] signature, PublicKey publicKey)` | 验证签名 |
-| `encrypt(byte[] plaintext, PublicKey publicKey)` | SM2 加密 |
+| `signWithParams(byte[] data, ECPrivateKeyParameters privateKey, byte[] userId)` | 签名（BC 底层参数） |
+| `verify(byte[] data, byte[] signature, PublicKey publicKey)` | 验证签名（默认用户 ID） |
+| `verify(byte[] data, byte[] signature, PublicKey publicKey, byte[] userId)` | 验证签名（指定用户 ID） |
+| `verifyWithParams(byte[] data, byte[] signature, ECPublicKeyParameters publicKey, byte[] userId)` | 验证签名（BC 底层参数） |
+| `encrypt(byte[] plaintext, PublicKey publicKey)` | SM2 加密（C1C3C2） |
+| `encryptBc(byte[] plaintext, ECPublicKeyParameters publicKey)` | SM2 加密（BC 底层参数） |
 | `decrypt(byte[] ciphertext, PrivateKey privateKey)` | SM2 解密 |
+| `decryptBc(byte[] ciphertext, ECPrivateKeyParameters privateKey)` | SM2 解密（BC 底层参数） |
+| `privateKeyToHex(PrivateKey privateKey)` | 私钥转十六进制字符串（64 字符） |
+| `publicKeyToHex(PublicKey publicKey)` | 公钥转十六进制（未压缩，130 字符，04 开头） |
+| `publicKeyToHexCompressed(PublicKey publicKey)` | 公钥转十六进制（压缩，66 字符） |
+| `privateKeyFromHex(String hex)` | 十六进制字符串恢复私钥 |
+| `publicKeyFromHex(String hex)` | 十六进制字符串恢复公钥 |
+| `getCurveSpec()` | 获取 SM2 曲线参数（sm2p256v1） |
+| `toBcKeyParams(KeyPair keyPair)` | JCA KeyPair 转 BC 密钥参数 |
+
+### 5.5 密钥序列化
+
+```java
+// 私钥 ↔ 十六进制
+String privHex = Sm2Util.privateKeyToHex(keyPair.getPrivate());
+PrivateKey restoredPriv = Sm2Util.privateKeyFromHex(privHex);
+
+// 公钥 ↔ 十六进制（未压缩）
+String pubHex = Sm2Util.publicKeyToHex(keyPair.getPublic());
+PublicKey restoredPub = Sm2Util.publicKeyFromHex(pubHex);
+
+// 压缩公钥（66 字符）
+String pubHexCompressed = Sm2Util.publicKeyToHexCompressed(keyPair.getPublic());
+```
 
 ---
 
@@ -252,13 +292,19 @@ try (InputStream is = new FileInputStream("largefile.dat")) {
 | 方法 | 说明 |
 |------|------|
 | `hash(byte[] data)` | 计算字节数组摘要 |
-| `hash(String text)` | 计算字符串摘要 |
-| `hash(InputStream inputStream)` | 计算流摘要（适合大文件） |
+| `hash(byte[] data, int offset, int length)` | 计算字节数组指定范围摘要 |
+| `hash(String text)` | 计算字符串摘要（UTF-8） |
+| `hash(InputStream inputStream)` | 计算流摘要（适合大文件，不关闭流） |
 | `hashHex(byte[] data)` | 返回十六进制字符串 |
 | `hashHex(String text)` | 返回十六进制字符串 |
 | `hashHex(InputStream inputStream)` | 返回十六进制字符串 |
 | `hashBase64(byte[] data)` | 返回 Base64 编码 |
+| `hashBase64(String text)` | 返回 Base64 编码（字符串） |
 | `newDigest()` | 获取 SM3Digest 实例（增量计算） |
+| `finalizeDigest(SM3Digest digest)` | 完成增量摘要计算并返回 32 字节结果 |
+| `getMessageDigest()` | 获取 JCE MessageDigest 实例（SM3，BC Provider） |
+| `toHex(byte[] bytes)` | 字节数组转十六进制字符串（小写） |
+| `fromHex(String hex)` | 十六进制字符串转字节数组 |
 
 ---
 
@@ -295,15 +341,21 @@ try {
 
 | 错误码 | 说明 |
 |--------|------|
-| `TSA_DATA_NULL` | 输入数据为空 |
+| `TSA_DATA_NULL` | 输入数据为空（timestamp/verifyTimestamp 的 null 入参） |
+| `TSA_HASH_EMPTY` | timestampWithHash 的预计算摘要为空 |
+| `TSA_STREAM_ERROR` | timestamp(InputStream) 读取流失败 |
+| `TSA_RESPONSE_NULL` | 时间戳响应数据为空 |
+| `TSA_EMPTY_RESPONSE` | TSA 返回空响应体 |
 | `TSA_HTTP_ERROR` | TSA 服务器返回非 200 状态 |
 | `TSA_HTTP_IO` | HTTP 请求失败（网络异常） |
-| `TSA_EMPTY_RESPONSE` | TSA 返回空响应 |
-| `TSA_REJECTED` | TSA 拒绝请求 |
+| `TSA_REJECTED` | TSA 拒绝请求（状态码非 0/1） |
 | `TSA_NO_TOKEN` | 响应中无时间戳令牌 |
+| `TSA_RESULT_NULL` | verifyTimestamp 的 result 或 token 为空 |
 | `TSA_VERIFY_FAILED` | 时间戳验证失败 |
 | `TSA_NO_SIGNER_CERT` | Token 中无签名者证书 |
-| `TSA_RESPONSE_NULL` | 响应数据为空 |
+| `TSA_CERT_LOAD` | loadCertificate 加载证书失败 |
+
+> 内部流程还可能抛出 `TSA_REQ_BUILD`（构造 TimeStampReq 失败）、`TSA_PARSE_ERROR`（解析 TimeStampResp 失败）、`TSA_ERROR`（默认错误码）。
 
 ---
 
@@ -312,6 +364,7 @@ try {
 ```
 com.shineyue.tsa
 ├── TsaClient.java              # 核心客户端（时间戳请求、验证）
+├── TsaSigner.java              # RFC 3161 服务端签名器（SM3withSM2，供 tsa-server-java 使用）
 ├── TsaProperties.java          # 配置属性
 ├── TsaAutoConfiguration.java   # Spring Boot 自动配置
 ├── aot/
