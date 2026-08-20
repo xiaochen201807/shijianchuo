@@ -85,6 +85,16 @@ public class TsaRuntimeHints implements RuntimeHintsRegistrar {
         // SM3 摘要算法主类 (MessageDigest.getInstance("SM3", "BC") 依赖)
         hints.reflection().registerTypeIfPresent(classLoader,
                 "org.bouncycastle.jcajce.provider.digest.SM3", all);
+        // SM3 摘要实现链: GeneralDigest(基类, 含 xBuf/xBufOff 状态) -> SM3Digest
+        // BCMessageDigest(JCA 包装, engineUpdate 委托到 lightweight Digest)
+        // 注册为反射类型可禁用 GraalVM 逃逸分析, 确保实例字段初始化器 (xBuf=new byte[4]) 正确执行,
+        // 避免 Native Image 中 xBufOff 状态损坏导致 ArrayIndexOutOfBoundsException
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.crypto.digests.GeneralDigest", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.crypto.digests.SM3Digest", all);
+        hints.reflection().registerTypeIfPresent(classLoader,
+                "org.bouncycastle.jcajce.provider.digest.BCMessageDigest", all);
 
         // 摘要算法 (验证时需要)
         hints.reflection().registerTypeIfPresent(classLoader,
