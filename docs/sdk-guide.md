@@ -17,7 +17,7 @@ TSA Spring Boot Starter 是一个基于 RFC 3161 时间戳协议的 Spring Boot 
 <dependency>
     <groupId>com.shineyue.tsa</groupId>
     <artifactId>tsa-spring-boot-starter</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
 </dependency>
 ```
 
