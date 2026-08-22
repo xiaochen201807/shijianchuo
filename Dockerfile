@@ -119,6 +119,8 @@ RUN mkdir -p \
         /scripts \
         /opt/tsa-demo/config \
     && useradd -r -u 10001 -s /usr/sbin/nologin tsademo 2>/dev/null || true \
+    && (id -u chrony >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin chrony) \
+    && (id -g chrony >/dev/null 2>&1 || groupadd -r chrony) \
     && chown -R chrony:chrony /var/log/chrony /var/lib/chrony \
     && chmod -R 755 /etc/tsa
 
