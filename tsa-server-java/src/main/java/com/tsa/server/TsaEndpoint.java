@@ -93,12 +93,7 @@ public class TsaEndpoint {
             produces = CONTENT_TYPE_REPLY)
     public ResponseEntity<byte[]> timestamp(@RequestBody byte[] request) {
         try {
-            long start = System.currentTimeMillis();
-
             byte[] response = signer.sign(request);
-
-            long elapsed = System.currentTimeMillis() - start;
-            logger.info("Timestamp signed in {}ms, response size: {} bytes", elapsed, response.length);
 
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(CONTENT_TYPE_REPLY))

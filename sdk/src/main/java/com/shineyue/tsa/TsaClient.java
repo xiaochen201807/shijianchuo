@@ -460,24 +460,9 @@ public class TsaClient {
 
     /**
      * 发送 HTTP POST 请求到 TSA 服务器
-     * 使用 HTTP keep-alive 复用 TCP 连接, 避免每次请求都 3-way handshake。
-     * 遇到 Connection reset (keep-alive 连接过期) 时自动重试一次。
+     * 每次请求完成后 disconnect, 避免 GraalVM Native Image 中 KeepAliveCache 行为异常。
      */
     private byte[] sendHttpPost(byte[] requestBody) throws TsaException {
-        try {
-            return doSendHttpPost(requestBody);
-        } catch (TsaException e) {
-            // keep-alive 缓存的连接可能已被服务端关闭 → Connection reset
-            // 重试一次 (新建连接), 避免 keep-alive 过期导致的偶发失败
-            if (e.getErrorCode().equals("TSA_HTTP_IO")) {
-                logger.debug("Retrying after connection reset");
-                return doSendHttpPost(requestBody);
-            }
-            throw e;
-        }
-    }
-
-    private byte[] doSendHttpPost(byte[] requestBody) throws TsaException {
         HttpURLConnection connection = null;
         try {
             URL url = URI.create(properties.getUrl()).toURL();
@@ -486,7 +471,9 @@ public class TsaClient {
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", CONTENT_TYPE_QUERY);
             connection.setRequestProperty("Accept", CONTENT_TYPE_REPLY);
-            connection.setRequestProperty("Connection", "keep-alive");
+            // GraalVM Native Image 中 KeepAliveCache 清理线程不工作,
+            // 不复用连接, 每次请求后关闭, 避免 Connection reset
+            connection.setRequestProperty("Connection", "close");
 
             connection.setConnectTimeout(properties.getConnectTimeout());
             connection.setReadTimeout(properties.getReadTimeout());
@@ -503,7 +490,6 @@ public class TsaClient {
             if (responseCode != 200) {
                 byte[] errorBytes = readStream(connection.getErrorStream());
                 String errorBody = errorBytes != null ? new String(errorBytes, StandardCharsets.UTF_8) : "";
-                connection.disconnect();
                 throw new TsaException("TSA_HTTP_ERROR",
                         "TSA server returned HTTP " + responseCode + ": " + errorBody);
             }
@@ -513,24 +499,19 @@ public class TsaClient {
                 logger.warn("Unexpected Content-Type: {}", contentType);
             }
 
-            try (InputStream is = connection.getInputStream()) {
-                byte[] responseBody = readStream(is);
-                if (responseBody == null || responseBody.length == 0) {
-                    throw new TsaException("TSA_EMPTY_RESPONSE", "TSA server returned empty response");
-                }
-                return responseBody;
+            byte[] responseBody = readStream(connection.getInputStream());
+            if (responseBody == null || responseBody.length == 0) {
+                throw new TsaException("TSA_EMPTY_RESPONSE", "TSA server returned empty response");
             }
 
+            return responseBody;
+
         } catch (IOException e) {
-            if (connection != null) {
-                connection.disconnect();
-            }
             throw new TsaException("TSA_HTTP_IO", "HTTP request to TSA failed", e);
-        } catch (TsaException e) {
+        } finally {
             if (connection != null) {
                 connection.disconnect();
             }
-            throw e;
         }
     }
 
