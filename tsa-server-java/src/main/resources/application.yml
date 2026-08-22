@@ -1,5 +1,11 @@
 server:
   port: 9001
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 50
+    accept-count: 200
+    max-connections: 8192
 
 spring:
   application:
@@ -22,8 +28,8 @@ tsa:
 # 日志配置
 logging:
   level:
-    root: INFO
+    root: WARN
     com.tsa.server: INFO
-    com.shineyue.tsa: INFO
+    com.shineyue.tsa: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

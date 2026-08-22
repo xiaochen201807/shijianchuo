@@ -6,6 +6,12 @@ server:
   port: 9090
   servlet:
     context-path: /
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 50
+    accept-count: 200
+    max-connections: 8192
 
 spring:
   application:
@@ -25,7 +31,7 @@ tsa:
 # 日志配置
 logging:
   level:
-    com.tsa: DEBUG
-    org.springframework.web: INFO
+    com.tsa: INFO
+    org.springframework.web: WARN
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

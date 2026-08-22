@@ -98,7 +98,7 @@ public class TsaEndpoint {
             byte[] response = signer.sign(request);
 
             long elapsed = System.currentTimeMillis() - start;
-            logger.debug("Timestamp signed in {}ms, response size: {} bytes", elapsed, response.length);
+            logger.info("Timestamp signed in {}ms, response size: {} bytes", elapsed, response.length);
 
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(CONTENT_TYPE_REPLY))

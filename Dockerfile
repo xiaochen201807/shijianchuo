@@ -119,6 +119,7 @@ RUN mkdir -p \
         /scripts \
         /opt/tsa-demo/config \
     && useradd -r -u 10001 -s /usr/sbin/nologin tsademo 2>/dev/null || true \
+    && chown -R chrony:chrony /var/log/chrony /var/lib/chrony \
     && chmod -R 755 /etc/tsa
 
 # TSA 服务配置与脚本

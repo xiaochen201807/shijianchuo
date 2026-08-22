@@ -349,8 +349,6 @@ public class TsaClient {
             // 3. 从 Token 内部提取签名证书
             CMSSignedData cmsData = new CMSSignedData(token.getEncoded());
             SignerInformation signerInfo = cmsData.getSignerInfos().getSigners().iterator().next();
-            JcaSimpleSignerInfoVerifierBuilder certConverter = new JcaSimpleSignerInfoVerifierBuilder();
-            certConverter.setProvider("BC");
 
             X509Certificate embeddedCert = null;
             for (Object certObj : cmsData.getCertificates().getMatches(signerInfo.getSID())) {
@@ -462,65 +460,77 @@ public class TsaClient {
 
     /**
      * 发送 HTTP POST 请求到 TSA 服务器
+     * 使用 HTTP keep-alive 复用 TCP 连接, 避免每次请求都 3-way handshake。
+     * 遇到 Connection reset (keep-alive 连接过期) 时自动重试一次。
      */
     private byte[] sendHttpPost(byte[] requestBody) throws TsaException {
+        try {
+            return doSendHttpPost(requestBody);
+        } catch (TsaException e) {
+            // keep-alive 缓存的连接可能已被服务端关闭 → Connection reset
+            // 重试一次 (新建连接), 避免 keep-alive 过期导致的偶发失败
+            if (e.getErrorCode().equals("TSA_HTTP_IO")) {
+                logger.debug("Retrying after connection reset");
+                return doSendHttpPost(requestBody);
+            }
+            throw e;
+        }
+    }
+
+    private byte[] doSendHttpPost(byte[] requestBody) throws TsaException {
         HttpURLConnection connection = null;
         try {
             URL url = URI.create(properties.getUrl()).toURL();
             connection = (HttpURLConnection) url.openConnection();
 
-            // 设置请求方法
             connection.setRequestMethod("POST");
-
-            // 设置 Content-Type (RFC 3161)
             connection.setRequestProperty("Content-Type", CONTENT_TYPE_QUERY);
             connection.setRequestProperty("Accept", CONTENT_TYPE_REPLY);
+            connection.setRequestProperty("Connection", "keep-alive");
 
-            // 设置超时
             connection.setConnectTimeout(properties.getConnectTimeout());
             connection.setReadTimeout(properties.getReadTimeout());
-
-            // 启用输出
             connection.setDoOutput(true);
             connection.setDoInput(true);
 
-            // 发送请求体
             try (OutputStream os = connection.getOutputStream()) {
                 os.write(requestBody);
                 os.flush();
             }
 
-            // 获取响应码
             int responseCode = connection.getResponseCode();
-            logger.debug("HTTP response code: {}", responseCode);
 
             if (responseCode != 200) {
                 byte[] errorBytes = readStream(connection.getErrorStream());
                 String errorBody = errorBytes != null ? new String(errorBytes, StandardCharsets.UTF_8) : "";
+                connection.disconnect();
                 throw new TsaException("TSA_HTTP_ERROR",
                         "TSA server returned HTTP " + responseCode + ": " + errorBody);
             }
 
-            // 检查 Content-Type
             String contentType = connection.getContentType();
             if (contentType != null && !contentType.contains(CONTENT_TYPE_REPLY)) {
                 logger.warn("Unexpected Content-Type: {}", contentType);
             }
 
-            // 读取响应体
-            byte[] responseBody = readStream(connection.getInputStream());
-            if (responseBody == null || responseBody.length == 0) {
-                throw new TsaException("TSA_EMPTY_RESPONSE", "TSA server returned empty response");
+            try (InputStream is = connection.getInputStream()) {
+                byte[] responseBody = readStream(is);
+                if (responseBody == null || responseBody.length == 0) {
+                    throw new TsaException("TSA_EMPTY_RESPONSE", "TSA server returned empty response");
+                }
+                return responseBody;
             }
 
-            return responseBody;
-
         } catch (IOException e) {
-            throw new TsaException("TSA_HTTP_IO", "HTTP request to TSA failed", e);
-        } finally {
             if (connection != null) {
                 connection.disconnect();
             }
+            throw new TsaException("TSA_HTTP_IO", "HTTP request to TSA failed", e);
+        } catch (TsaException e) {
+            if (connection != null) {
+                connection.disconnect();
+            }
+            throw e;
         }
     }
 

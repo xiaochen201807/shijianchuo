@@ -31,6 +31,8 @@ mkdir -p \
     /etc/tsa/certs /etc/nginx/tls /var/www/tsa /var/lib/tsa \
     /var/log/tsa /var/log/nginx /var/log/supervisor /var/log/chrony \
     /var/lib/chrony /run/chrony /run /opt/tsa-demo/config
+# chronyd 启动后会 privilege drop 到 chrony 用户, 目录必须归 chrony 所有
+chown -R chrony:chrony /var/log/chrony /var/lib/chrony /run/chrony
 echo "[OK]"
 
 echo ""

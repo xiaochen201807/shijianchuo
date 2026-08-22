@@ -11,7 +11,6 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cms.DefaultSignedAttributeTableGenerator;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.DigestCalculator;
-import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.tsp.*;
 import org.bouncycastle.util.Store;
 import org.slf4j.Logger;
@@ -25,7 +24,6 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.ArrayList;
 
 /**
  * TSA 本地签名器 - 基于 BouncyCastle 的 RFC 3161 时间戳签名
@@ -78,6 +76,14 @@ public class TsaSigner {
     private final Store<X509CertificateHolder> certStore;
 
     /**
+     * 线程本地 TokenGenerator 缓存。
+     * 每个线程首次使用时通过 JCA 反射创建 (含 Signature + SM3Digest, ~20-40ms in GraalVM),
+     * 后续请求直接复用, 避免每次反射开销。
+     * BC 的 doFinal() / sign() 会自动 reset 内部状态, 可安全复用。
+     */
+    private final ThreadLocal<TimeStampTokenGenerator> tokenGeneratorCache;
+
+    /**
      * 创建 TSA 本地签名器
      *
      * @param certificate TSA 签名证书 (SM2)
@@ -123,6 +129,25 @@ public class TsaSigner {
         }
         this.certStore = new org.bouncycastle.util.CollectionStore<>(certHolders);
 
+        // 在构造器末尾初始化 ThreadLocal, 此时所有 final 字段已赋值
+        this.tokenGeneratorCache = ThreadLocal.withInitial(() -> {
+            try {
+                org.bouncycastle.cms.SignerInfoGenerator signerInfoGen =
+                        new org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoGeneratorBuilder()
+                                .setProvider("BC")
+                                .setSignedAttributeGenerator(new DefaultSignedAttributeTableGenerator())
+                                .build(SIGNATURE_ALGORITHM, privateKey, certificate);
+
+                TimeStampTokenGenerator tg = new TimeStampTokenGenerator(
+                        signerInfoGen, new SM3DigestCalculator(), policyOidAsn1);
+                tg.addCertificates(certStore);
+                tg.setAccuracySeconds(1);
+                return tg;
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to initialize ThreadLocal TimeStampTokenGenerator", e);
+            }
+        });
+
         logger.info("TsaSigner initialized: cert={}, policy={}, algorithm={}, chainSize={}",
                 certificate.getSubjectX500Principal().getName(),
                 policyOid, SIGNATURE_ALGORITHM, certHolders.size());
@@ -141,38 +166,14 @@ public class TsaSigner {
         }
 
         try {
-            // 每次请求创建独立的可变对象 (线程安全, 无锁)
-            // SignerInfoGenerator 内含 Signature 实例, SM3DigestCalculator 内含 SM3Digest,
-            // 二者均有状态, 必须为线程私有
-            org.bouncycastle.cms.SignerInfoGenerator signerInfoGen =
-                    new org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoGeneratorBuilder()
-                            .setProvider("BC")
-                            .setSignedAttributeGenerator(new DefaultSignedAttributeTableGenerator())
-                            .build(SIGNATURE_ALGORITHM, privateKey, certificate);
+            // 复用线程本地的 TokenGenerator (首次创建含反射开销, 后续直接复用)
+            // SM3Digest.doFinal() 和 Signature.sign() 会自动 reset, 可安全复用
+            TimeStampTokenGenerator tokenGenerator = tokenGeneratorCache.get();
 
-            DigestCalculator digestCalculator = new SM3DigestCalculator();
-
-            TimeStampTokenGenerator tokenGenerator = new TimeStampTokenGenerator(
-                    signerInfoGen,
-                    digestCalculator,
-                    policyOidAsn1
-            );
-            tokenGenerator.addCertificates(certStore);
-
-            // RFC 3161: Accuracy.millis 取值范围为 (1..999)，是秒以下的余数。
-            // 1000ms 即 1 秒，应通过 seconds 字段表达。
-            tokenGenerator.setAccuracySeconds(1);
-
-            // 1. 解析请求
             TimeStampRequest request = new TimeStampRequest(requestDer);
-
-            // 2. 生成序列号
             BigInteger serialNumber = BigInteger.valueOf(SERIAL_COUNTER.getAndIncrement());
-
-            // 3. 生成时间戳令牌 (BC 1.81: generate 方法)
             TimeStampToken token = tokenGenerator.generate(request, serialNumber, new Date());
 
-            // 4. 构建 TimeStampResp DER (SEQUENCE { status, token })
             PKIStatusInfo statusInfo = new PKIStatusInfo(PKIStatus.granted, null, null);
             ContentInfo contentInfo = ContentInfo.getInstance(token.getEncoded());
             byte[] responseDer = new DERSequence(new org.bouncycastle.asn1.ASN1Encodable[]{
@@ -187,14 +188,9 @@ public class TsaSigner {
         } catch (TSPException e) {
             logger.error("Timestamp signing failed", e);
             throw new TsaException("TSA_SIGN_FAILED", "Timestamp signing failed: " + e.getMessage(), e);
-        } catch (CertificateEncodingException e) {
-            logger.error("Timestamp encoding failed", e);
-            throw new TsaException("TSA_Certificate_ENCODE", "Failed to encode Certificate", e);
         } catch (IOException e) {
             logger.error("Timestamp encoding failed", e);
             throw new TsaException("TSA_SIGN_ENCODE", "Failed to encode timestamp response", e);
-        } catch (OperatorCreationException e) {
-            throw new RuntimeException(e);
         }
     }
 
