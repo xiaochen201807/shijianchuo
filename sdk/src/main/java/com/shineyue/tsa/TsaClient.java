@@ -460,10 +460,16 @@ public class TsaClient {
 
     /**
      * 发送 HTTP POST 请求到 TSA 服务器
-     * 每次请求完成后 disconnect, 避免 GraalVM Native Image 中 KeepAliveCache 行为异常。
+     *
+     * 设计说明:
+     * - 使用 HTTP/1.1 默认 keepalive (不发送 Connection: close)
+     * - 不调用 disconnect(), 让连接进入 JVM KeepAliveCache 被后续请求复用
+     * - 必须完整读取响应体 + 关闭 InputStream, HttpURLConnection 才会归还连接到缓存池
+     * - 这样避免每次请求消耗临时端口, 解决高并发下 BindException: Cannot assign requested address
      */
     private byte[] sendHttpPost(byte[] requestBody) throws TsaException {
         HttpURLConnection connection = null;
+        InputStream responseStream = null;
         try {
             URL url = URI.create(properties.getUrl()).toURL();
             connection = (HttpURLConnection) url.openConnection();
@@ -471,9 +477,8 @@ public class TsaClient {
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", CONTENT_TYPE_QUERY);
             connection.setRequestProperty("Accept", CONTENT_TYPE_REPLY);
-            // GraalVM Native Image 中 KeepAliveCache 清理线程不工作,
-            // 不复用连接, 每次请求后关闭, 避免 Connection reset
-            connection.setRequestProperty("Connection", "close");
+            // 注意: 不设置 Connection: close —— 让 HttpURLConnection 复用连接
+            // JVM KeepAliveCache 会自动管理连接池, 默认 keepalive 5s, 缓存 5 条/目标
 
             connection.setConnectTimeout(properties.getConnectTimeout());
             connection.setReadTimeout(properties.getReadTimeout());
@@ -488,6 +493,7 @@ public class TsaClient {
             int responseCode = connection.getResponseCode();
 
             if (responseCode != 200) {
+                // 错误流必须读完才能归还连接
                 byte[] errorBytes = readStream(connection.getErrorStream());
                 String errorBody = errorBytes != null ? new String(errorBytes, StandardCharsets.UTF_8) : "";
                 throw new TsaException("TSA_HTTP_ERROR",
@@ -499,7 +505,8 @@ public class TsaClient {
                 logger.warn("Unexpected Content-Type: {}", contentType);
             }
 
-            byte[] responseBody = readStream(connection.getInputStream());
+            responseStream = connection.getInputStream();
+            byte[] responseBody = readStream(responseStream);
             if (responseBody == null || responseBody.length == 0) {
                 throw new TsaException("TSA_EMPTY_RESPONSE", "TSA server returned empty response");
             }
@@ -507,11 +514,21 @@ public class TsaClient {
             return responseBody;
 
         } catch (IOException e) {
-            throw new TsaException("TSA_HTTP_IO", "HTTP request to TSA failed", e);
-        } finally {
+            // 异常时强制丢弃连接, 不复用
             if (connection != null) {
                 connection.disconnect();
             }
+            throw new TsaException("TSA_HTTP_IO", "HTTP request to TSA failed", e);
+        } finally {
+            // 必须关闭 InputStream, HttpURLConnection 才会把连接归还到 KeepAliveCache
+            if (responseStream != null) {
+                try {
+                    responseStream.close();
+                } catch (IOException ignored) {
+                }
+            }
+            // 注意: 正常情况 NOT 调用 disconnect() —— 让连接留在缓存池中被复用
+            // 只有异常情况才 disconnect() 丢弃坏连接
         }
     }
 
