@@ -8,6 +8,7 @@ TSA Spring Boot Starter 是一个基于 RFC 3161 时间戳协议的 Spring Boot 
 
 - 对数据请求 RFC 3161 时间戳（默认使用 SM3 摘要算法）
 - 验证时间戳令牌（自动从 Token 提取证书，无需外部传入）
+- 远端文件打时间戳/验证（GET 下载到本地临时目录，流式处理，处理后自动删除）
 - SM2 密钥对生成、签名验证、加解密
 - SM3 摘要计算
 
@@ -17,7 +18,7 @@ TSA Spring Boot Starter 是一个基于 RFC 3161 时间戳协议的 Spring Boot 
 <dependency>
     <groupId>com.shineyue.tsa</groupId>
     <artifactId>tsa-spring-boot-starter</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.4</version>
 </dependency>
 ```
 
@@ -27,22 +28,49 @@ TSA Spring Boot Starter 是一个基于 RFC 3161 时间戳协议的 Spring Boot 
 
 ### 2.1 配置
 
-在 `application.yml` 中添加配置：
+SDK 默认不加载，仅需启用时配置 `enabled` 和 `url` 即可，其他配置项均有合理默认值，可根据实际情况按需调整。
+
+**最小配置（启用 SDK）：**
 
 ```yaml
 tsa:
-  url: http://your-tsa-server/tsa    # TSA 服务器地址（必须）
-  connect-timeout: 5000              # 连接超时（毫秒），默认 5000
-  read-timeout: 30000                # 读取超时（毫秒），默认 30000
-  policy-oid: 1.2.3.4.1              # TSA 策略 OID
-  cert-req: true                     # 是否请求 TSA 证书
-  hash-algorithm: SM3                # 摘要算法（默认 SM3）
-  auto-register-provider: true       # 是否自动注册 BouncyCastle Provider
+  enabled: true                     # 启用 SDK
+  url: http://your-tsa-server/tsa  # TSA 服务器地址（必须）
+  gofastdfs-store: http://xxx.xxx.xx.xx:xxx  # gofastdfs-store电子档案访问程序地址
 ```
 
-或使用 `application.properties` 格式：
+```properties
+tsa.enabled=true
+tsa.url=http://your-tsa-server/tsa
+tsa.gofastdfs-store=http://xxx.xxx.xx.xx:xxx
+```
+
+**不使用 SDK 时：**
+
+无需任何配置，或显式关闭：
+
+```yaml
+tsa:
+  enabled: false   # 可选，不配置等同于此
+```
+
+**完整配置参考：**
+
+```yaml
+tsa:
+  enabled: true                           # 是否启用 SDK（默认 false，需显式开启）
+  url: http://your-tsa-server/tsa        # TSA 服务器地址（必须）
+  connect-timeout: 5000                  # TCP 连接超时（毫秒），默认 5000
+  read-timeout: 30000                    # HTTP 响应读取超时（毫秒），默认 30000
+  policy-oid: 1.2.3.4.1                  # TSA 时间戳策略 OID，需与服务端配置一致
+  cert-req: true                         # 是否要求 TSA 在响应中返回签名证书
+  hash-algorithm: SM3                    # 摘要算法，默认 SM3（目前仅支持 SM3）
+  auto-register-provider: true           # 是否自动注册 BouncyCastle Provider
+  gofastdfs-store: http://xxx.xxx.xx.xx:xxx   # gofastdfs-store文件存储地址（无默认值，远端文件功能必须配置）
+```
 
 ```properties
+tsa.enabled=true
 tsa.url=http://your-tsa-server/tsa
 tsa.connect-timeout=5000
 tsa.read-timeout=30000
@@ -50,9 +78,23 @@ tsa.policy-oid=1.2.3.4.1
 tsa.cert-req=true
 tsa.hash-algorithm=SM3
 tsa.auto-register-provider=true
+tsa.gofastdfs-store=http://xxx.xxx.xx.xx:xxx
 ```
 
-### 2.2 基本使用
+> **关于 `gofastdfs-store`：** 该配置项无默认值，仅在调用 `timestampRemoteFile` / `verifyRemoteFile`
+> 远端文件打戳/验戳功能时必须配置。实际下载地址 = `gofastdfs-store` 配置值 + 方法传入的 `filePath` 参数。
+> 不使用远端文件功能时无需配置此项。
+
+### 2.2 注入方式
+
+推荐使用 `@Autowired(required = false)` 注入，确保 SDK 未启用时程序正常启动：
+
+```java
+@Autowired(required = false)
+private TsaClient tsaClient;
+```
+
+### 2.3 基本使用
 
 ```java
 import com.shineyue.tsa.TsaClient;
@@ -63,50 +105,54 @@ import org.springframework.beans.factory.annotation.Autowired;
 @Service
 public class YourService {
 
-    @Autowired
+    @Autowired(required = false)
     private TsaClient tsaClient;
 
     // 对字符串打时间戳
     public void timestampText() {
         TimeStampResult result = tsaClient.timestamp("Hello, 国密时间戳!");
 
-        // 序列号：TSA 为本次请求分配的唯一序号（十六进制），用于事后追溯
-        System.out.println("序列号: " + result.getSerialNumberHex());
-
-        // 生成时间：TSA 对本时间戳签名的 UTC 时刻（服务端 chrony/NTP 同步，作为可信时间凭证）
-        System.out.println("生成时间: " + result.getGenTime());
-
-        // 时间戳响应（RFC 3161 TimeStampResp 的 Base64）：
-        //   完整响应 = 状态(status) + 时间戳令牌(TimeStampToken)。令牌内含被盖戳的原始摘要、
-        //   生成时间、序列号、策略 OID，以及 TSA 的 SM2 数字签名与签名者证书(cert-req=true 时附带)。
-        //   这是要持久化保存的"时间戳凭证"，也是下方 verifyTimestamp(text, responseBase64) 的入参。
-        System.out.println("响应 (Base64): " + result.getEncodedResponseBase64());
+        if (result.isSuccess()) {
+            // 成功: 持久化保存时间戳凭证
+            String responseBase64 = result.getEncodedResponseBase64();
+            System.out.println("序列号: " + result.getSerialNumberHex());
+            System.out.println("生成时间: " + result.getGenTime());
+            System.out.println("凭证 (Base64): " + responseBase64);
+        } else {
+            // 失败: 获取错误信息
+            System.out.println("加戳失败: [" + result.getErrorCode() + "] " + result.getErrorMessage());
+        }
     }
 
     // 验证时间戳
     public void verifyTimestamp() {
         String text = "Hello, 国密时间戳!";
-        String responseBase64 = "..."; // 即上面 timestampText() 打印的"响应 (Base64)"
-        
+        String responseBase64 = "..."; // 即加戳时保存的“凭证 (Base64)”
+
         TimeStampVerifyResult result = tsaClient.verifyTimestamp(text, responseBase64);
-        
-        // isValid()：签名有效 且 摘要匹配，二者都成立才算通过
+
         if (result.isValid()) {
+            // 验证通过：签名有效 且 摘要匹配
             System.out.println("验证通过");
-            // 签名证书主题：从 Token 内嵌 CMS 中自动提取的 TSA 证书 DN（CN/O）
             System.out.println("签名证书: " + result.getCertSubject());
+        } else if (result.getErrorCode() != null) {
+            // 验证过程出错（参数错误、解析失败、网络异常等）
+            System.out.println("验证出错: [" + result.getErrorCode() + "] " + result.getErrorMessage());
         } else {
-            System.out.println("验证失败");
-            // 签名有效：TSA 的 SM2 签名是否能用其证书公钥验签通过
+            // 验证结果不通过（签名无效或摘要不匹配）
+            System.out.println("验证未通过");
             System.out.println("签名有效: " + result.isSignatureValid());
-            // 摘要匹配：把原文重新做 SM3 后，与 Token 内记录的摘要是否一致（防原文被篡改）
             System.out.println("摘要匹配: " + result.isHashMatch());
         }
     }
 }
 ```
 
-### 2.3 大文件流式验证
+> **重要：** SDK 所有方法不再抛出异常，错误信息封装在结果对象中。
+> - 加戳：`isSuccess()` 为 `false` 时通过 `getErrorCode()` + `getErrorMessage()` 获取失败原因
+> - 验戳：`isValid()` 为 `false` 时需区分「过程出错」和「验证不通过」两种情况
+
+### 2.4 大文件流式验证
 
 对大文件打时间戳与验证都走 InputStream，全程无需把文件整体读入内存：
 
@@ -120,20 +166,59 @@ TimeStampResult result;
 try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
     result = tsaClient.timestamp(in);
 }
-// 持久化保存完整响应 Base64（即"时间戳凭证"，也是日后验证的入参）
-String responseBase64 = result.getEncodedResponseBase64();
-System.out.println("序列号: " + result.getSerialNumberHex());
-System.out.println("生成时间: " + result.getGenTime());
+
+if (result.isSuccess()) {
+    String responseBase64 = result.getEncodedResponseBase64();
+    System.out.println("序列号: " + result.getSerialNumberHex());
+    System.out.println("凭证: " + responseBase64);
+} else {
+    System.out.println("加戳失败: [" + result.getErrorCode() + "] " + result.getErrorMessage());
+}
 
 // 2. 日后验证：再次以流方式读同一文件，与凭证比对
 try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
     TimeStampVerifyResult vr = tsaClient.verifyTimestamp(in, responseBase64);
-    System.out.println("验证通过: " + vr.isValid());
-    System.out.println("签名证书: " + vr.getCertSubject());
-    if (!vr.isValid()) {
-        System.out.println("签名有效: " + vr.isSignatureValid());
-        System.out.println("摘要匹配: " + vr.isHashMatch());
+    if (vr.isValid()) {
+        System.out.println("验证通过，签名证书: " + vr.getCertSubject());
+    } else if (vr.getErrorCode() != null) {
+        System.out.println("验证出错: [" + vr.getErrorCode() + "] " + vr.getErrorMessage());
+    } else {
+        System.out.println("验证未通过，签名有效: " + vr.isSignatureValid() + ", 摘要匹配: " + vr.isHashMatch());
     }
+}
+```
+
+### 2.5 远端文件打时间戳/验证
+
+基于远端文件路径直接打时间戳/验证，无需手动下载文件。SDK 内部流程：
+
+1. GET 请求下载：实际地址 = `tsa.gofastdfs-store` 配置值 + 传入的 `filePath` 参数
+2. 下载流式写入当前程序运行目录下的 `temp/` 子目录，不占用堆内存
+3. 以文件流方式计算 SM3 摘要并请求/验证时间戳
+4. 无论成功或失败，临时文件最终都会被自动删除
+
+```java
+// 前提: application.yml 已配置 tsa.gofastdfs-store
+
+// 1. 对远端文件打时间戳
+TimeStampResult result = tsaClient.timestampRemoteFile("/group1/default/document.pdf");
+
+if (result.isSuccess()) {
+    String responseBase64 = result.getEncodedResponseBase64();
+    System.out.println("序列号: " + result.getSerialNumberHex());
+    System.out.println("凭证: " + responseBase64);
+} else {
+    System.out.println("加戳失败: [" + result.getErrorCode() + "] " + result.getErrorMessage());
+}
+
+// 2. 日后验证：下载同一远端文件，与凭证比对
+TimeStampVerifyResult vr = tsaClient.verifyRemoteFile("/group1/default/document.pdf", responseBase64);
+if (vr.isValid()) {
+    System.out.println("验证通过，签名证书: " + vr.getCertSubject());
+} else if (vr.getErrorCode() != null) {
+    System.out.println("验证出错: [" + vr.getErrorCode() + "] " + vr.getErrorMessage());
+} else {
+    System.out.println("验证未通过，签名有效: " + vr.isSignatureValid() + ", 摘要匹配: " + vr.isHashMatch());
 }
 ```
 
@@ -150,6 +235,7 @@ try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
 | `timestamp(InputStream inputStream)` | 输入流 | `TimeStampResult` | 对流数据打时间戳（适合大文件） |
 | `timestampWithHash(byte[] hash, ASN1ObjectIdentifier hashOid)` | 预计算摘要 + 算法 OID | `TimeStampResult` | 使用预先计算的摘要请求时间戳 |
 | `timestampWithSm3Hash(byte[] sm3Hash)` | SM3 摘要值 | `TimeStampResult` | 使用 SM3 预计算摘要 |
+| `timestampRemoteFile(String filePath)` | 远端文件路径 | `TimeStampResult` | **远端文件打时间戳**（GET 下载到本地临时目录，流式处理，自动删除） |
 
 ### 3.2 时间戳验证方法
 
@@ -160,8 +246,13 @@ try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
 | `verifyTimestamp(String text, String responseBase64)` | 文本 + Base64 响应 | `TimeStampVerifyResult` | **自动提取证书验证**（便捷方法） |
 | `verifyTimestamp(InputStream inputStream, byte[] responseDer)` | 输入流 + DER 响应 | `TimeStampVerifyResult` | **流式验证**（大文件，低内存，不关闭流） |
 | `verifyTimestamp(InputStream inputStream, String responseBase64)` | 输入流 + Base64 响应 | `TimeStampVerifyResult` | **流式验证**（便捷，大文件） |
+| `verifyRemoteFile(String filePath, String responseBase64)` | 远端文件路径 + Base64 响应 | `TimeStampVerifyResult` | **远端文件验证**（GET 下载到本地临时目录，流式处理，自动删除） |
 
 > **推荐用法：** 使用 `verifyTimestamp(String text, String responseBase64)` 或 `verifyTimestamp(byte[] data, byte[] responseDer)`，无需外部传入证书，自动从 Token 内嵌的 CMS SignedData 中提取签名者证书进行验证。支持证书轮换/续期场景。
+
+> **错误处理：** 所有方法均不抛出异常，错误封装在结果对象中：
+> - 加戳方法返回 `TimeStampResult`：`isSuccess()` 为 `false` 时通过 `getErrorCode()` / `getErrorMessage()` 获取失败原因
+> - 验戳方法返回 `TimeStampVerifyResult`：`isValid()` 为 `false` 时检查 `getErrorCode()` 区分「过程出错」与「验证不通过」
 
 ### 3.3 辅助方法
 
@@ -189,15 +280,20 @@ try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
 | `messageImprint` | `byte[]` | 原始摘要值 |
 | `status` | `int` | 状态码（0=granted） |
 | `statusString` | `String` | 状态描述 |
+| `success` | `boolean` | 是否成功（status=0/1 且无错误时为 true） |
+| `errorCode` | `String` | 错误码（请求失败时填充，成功时为 null） |
+| `errorMessage` | `String` | 错误消息（请求失败时填充，成功时为 null） |
 
 **常用方法：**
 
 ```java
+result.isSuccess();                   // 是否成功
 result.getEncodedResponseBase64();    // 响应 Base64 编码
 result.getTimeStampTokenBase64();     // Token Base64 编码
 result.getSerialNumberHex();          // 序列号十六进制
 result.getMessageImprintHex();        // 摘要十六进制
-result.isSuccess();                   // 是否成功
+result.getErrorCode();                // 错误码（失败时）
+result.getErrorMessage();             // 错误消息（失败时）
 ```
 
 ### 4.2 TimeStampVerifyResult
@@ -216,6 +312,8 @@ result.isSuccess();                   // 是否成功
 | `serialNumber` | `String` | 时间戳序列号（十六进制） |
 | `genTime` | `Date` | 时间戳生成时间 |
 | `policyOid` | `String` | 时间戳策略 OID |
+| `errorCode` | `String` | 错误码（验证过程出错时填充，正常时为 null） |
+| `errorMessage` | `String` | 错误消息（验证过程出错时填充，正常时为 null） |
 
 ---
 
@@ -345,28 +443,50 @@ try (InputStream is = new FileInputStream("largefile.dat")) {
 
 | 属性 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `url` | String | `http://localhost:8080/tsa` | TSA 服务器地址 |
-| `connect-timeout` | int | 5000 | 连接超时（毫秒） |
-| `read-timeout` | int | 30000 | 读取超时（毫秒） |
-| `policy-oid` | String | `1.2.3.4.1` | TSA 策略 OID |
-| `cert-req` | boolean | true | 是否请求 TSA 证书 |
-| `hash-algorithm` | String | `SM3` | 摘要算法 |
-| `auto-register-provider` | boolean | true | 是否自动注册 BC Provider |
+| `enabled` | boolean | `false` | **是否启用 SDK**，设为 `true` 才会创建 TsaClient Bean，不配置则 SDK 不加载 |
+| `url` | String | `http://localhost:8080/tsa` | TSA 时间戳服务器地址，启用 SDK 时必须配置 |
+| `connect-timeout` | int | `5000` | TCP 连接超时时间（毫秒），网络延迟较高时可适当加大 |
+| `read-timeout` | int | `30000` | HTTP 响应读取超时时间（毫秒），大文件或慢网络时可适当加大 |
+| `policy-oid` | String | `1.2.3.4.1` | TSA 时间戳策略 OID，需与服务端配置的 policy_oid 保持一致 |
+| `cert-req` | boolean | `true` | 是否要求 TSA 在响应中返回签名证书，验证时间戳时需要用到 |
+| `hash-algorithm` | String | `SM3` | 摘要算法，目前仅支持 SM3 |
+| `auto-register-provider` | boolean | `true` | 是否自动注册 BouncyCastle Provider，已手动注册时可设为 `false` |
+| `gofastdfs-store` | String | 无 | GoFastDFS 文件存储地址（IP+端口），**无默认值，使用远端文件功能时必须配置** |
+
+> `gofastdfs-store` 用于 `timestampRemoteFile` / `verifyRemoteFile` 方法，
+> 实际下载地址 = `gofastdfs-store` 配置值 + 方法传入的 `filePath` 参数（自动处理斜杠拼接与 URL 编码）。
+> 未配置时调用远端文件方法将抛出 `TSA_CONFIG_MISSING` 异常。
 
 ---
 
-## 8. 异常处理
+## 8. 错误处理
 
-SDK 抛出 `TsaException` 表示错误，包含错误码和错误信息：
+SDK 所有方法均不抛出异常，错误信息封装在结果对象的 `errorCode` / `errorMessage` 字段中：
+
+**加戳错误处理：**
 
 ```java
-import com.shineyue.tsa.exception.TsaException;
+TimeStampResult result = tsaClient.timestamp("data");
+if (!result.isSuccess()) {
+    System.err.println("错误码: " + result.getErrorCode());
+    System.err.println("错误信息: " + result.getErrorMessage());
+}
+```
 
-try {
-    TimeStampResult result = tsaClient.timestamp("data");
-} catch (TsaException e) {
-    System.err.println("错误码: " + e.getErrorCode());
-    System.err.println("错误信息: " + e.getMessage());
+**验戳错误处理：**
+
+```java
+TimeStampVerifyResult result = tsaClient.verifyTimestamp(text, responseBase64);
+if (!result.isValid()) {
+    if (result.getErrorCode() != null) {
+        // 过程出错（参数错误、解析失败、网络异常等）
+        System.err.println("错误码: " + result.getErrorCode());
+        System.err.println("错误信息: " + result.getErrorMessage());
+    } else {
+        // 验证结果不通过（签名无效或摘要不匹配）
+        System.out.println("签名有效: " + result.isSignatureValid());
+        System.out.println("摘要匹配: " + result.isHashMatch());
+    }
 }
 ```
 
@@ -384,11 +504,14 @@ try {
 | `TSA_REJECTED` | TSA 拒绝请求（状态码非 0/1） |
 | `TSA_NO_TOKEN` | 响应中无时间戳令牌 |
 | `TSA_RESULT_NULL` | verifyTimestamp 的 result 或 token 为空 |
-| `TSA_VERIFY_FAILED` | 时间戳验证失败 |
+| `TSA_REQUEST_FAILED` | 时间戳请求过程异常（网络、解析等未分类错误） |
+| `TSA_VERIFY_FAILED` | 时间戳验证过程异常 |
 | `TSA_NO_SIGNER_CERT` | Token 中无签名者证书 |
 | `TSA_CERT_LOAD` | loadCertificate 加载证书失败 |
+| `TSA_CONFIG_MISSING` | 未配置 `tsa.gofastdfs-store` 却调用远端文件方法 |
+| `TSA_DOWNLOAD_ERROR` | 远端文件下载失败（HTTP 非 200 或网络异常） |
 
-> 内部流程还可能抛出 `TSA_REQ_BUILD`（构造 TimeStampReq 失败）、`TSA_PARSE_ERROR`（解析 TimeStampResp 失败）、`TSA_ERROR`（默认错误码）。
+> 内部流程也可能产生 `TSA_REQ_BUILD`（构造请求失败）、`TSA_PARSE_ERROR`（解析响应失败）等错误码，均封装在结果对象中。
 
 ---
 
@@ -396,9 +519,9 @@ try {
 
 ```
 com.shineyue.tsa
-├── TsaClient.java              # 核心客户端（时间戳请求、验证）
+├── TsaClient.java              # 核心客户端（时间戳请求、验证、远端文件打时间戳/验证）
 ├── TsaSigner.java              # RFC 3161 服务端签名器（SM3withSM2，供 tsa-server-java 使用）
-├── TsaProperties.java          # 配置属性
+├── TsaProperties.java          # 配置属性（含 tsa.gofastdfs-store 远端文件存储地址）
 ├── TsaAutoConfiguration.java   # Spring Boot 自动配置
 ├── aot/
 │   └── TsaRuntimeHints.java    # GraalVM Native Image 支持

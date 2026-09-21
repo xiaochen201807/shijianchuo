@@ -1,7 +1,6 @@
 package com.tsa.demo.controller;
 
 import com.shineyue.tsa.TsaClient;
-import com.shineyue.tsa.exception.TsaException;
 import com.shineyue.tsa.model.TimeStampResult;
 import com.shineyue.tsa.model.TimeStampVerifyResult;
 import com.shineyue.tsa.sm2.Sm2Util;
@@ -11,13 +10,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.KeyPair;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.cert.X509Certificate;
 import java.util.Base64;
-import java.util.Date;
 import java.util.Map;
 import java.util.LinkedHashMap;
 
@@ -41,9 +44,12 @@ import java.util.LinkedHashMap;
  *    POST /api/tsa/timestamp
  *    POST /api/tsa/timestamp/text
  *    POST /api/tsa/timestamp/sm3
+ *    POST /api/tsa/timestamp/file
+ *    POST /api/tsa/timestamp/remoteFile
  *
  * 4. TSA 时间戳验证
  *    POST /api/tsa/verify
+ *    POST /api/tsa/verify/remoteFile
  */
 @RestController
 @RequestMapping("/api")
@@ -51,7 +57,7 @@ public class TsaDemoController {
 
     private static final Logger logger = LoggerFactory.getLogger(TsaDemoController.class);
 
-    @Autowired
+    @Autowired(required = false)
     private TsaClient tsaClient;
 
     // ================================================================
@@ -313,19 +319,8 @@ public class TsaDemoController {
         if (text == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Missing 'text' field"));
         }
-
-        try {
-            byte[] data = text.getBytes(StandardCharsets.UTF_8);
-            TimeStampResult result = tsaClient.timestamp(data);
-
-            return ResponseEntity.ok(buildTimestampResponse(result, text));
-        } catch (TsaException e) {
-            logger.error("Timestamp request failed", e);
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "error", e.getMessage(),
-                    "errorCode", e.getErrorCode()
-            ));
-        }
+        TimeStampResult result = tsaClient.timestamp(text.getBytes(StandardCharsets.UTF_8));
+        return ResponseEntity.ok(buildTimestampResponse(result, text));
     }
 
     /**
@@ -340,19 +335,45 @@ public class TsaDemoController {
         if (dataBase64 == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Missing 'dataBase64' field"));
         }
-
         try {
             byte[] data = Base64.getDecoder().decode(dataBase64);
             TimeStampResult result = tsaClient.timestamp(data);
-
             return ResponseEntity.ok(buildTimestampResponse(result, null));
-        } catch (TsaException e) {
-            logger.error("Timestamp request failed", e);
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "error", e.getMessage(),
-                    "errorCode", e.getErrorCode()
-            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid Base64 input: " + e.getMessage()));
         }
+    }
+
+    @PostMapping("/tsa/timestamp/file")
+    public ResponseEntity<Map<String, Object>> timestampFile(@RequestParam("file") MultipartFile file) {
+        try (InputStream in = file.getInputStream()) {
+            TimeStampResult result = tsaClient.timestamp(in);
+            return ResponseEntity.ok(buildTimestampResponse(result, null));
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", "Failed to read uploaded file: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * 对远端文件请求时间戳 (SDK 流式下载到本地临时目录后处理)
+     *
+     * POST /api/tsa/timestamp/remoteFile
+     * Body: { "filePath": "/group1/default/document.pdf" }
+     *
+     * 前提: application.yml 已配置 tsa.gofastdfs-store (GoFastDFS 文件下载地址前缀)
+     * 实际下载地址 = gofastdfs-store 配置值 + filePath
+     */
+    @PostMapping("/tsa/timestamp/remoteFile")
+    public ResponseEntity<Map<String, Object>> timestampRemoteFile(@RequestBody Map<String, String> body) {
+        String filePath = body.get("filePath");
+        if (filePath == null || filePath.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Missing or empty 'filePath' field"));
+        }
+        TimeStampResult result = tsaClient.timestampRemoteFile(filePath);
+        Map<String, Object> response = buildTimestampResponse(result, null);
+        response.put("remoteFilePath", filePath);
+        response.put("source", "remote");
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -367,26 +388,12 @@ public class TsaDemoController {
         if (text == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Missing 'text' field"));
         }
-
-        try {
-            byte[] data = text.getBytes(StandardCharsets.UTF_8);
-            byte[] hash = Sm3Util.hash(data);
-
-            logger.info("SM3 hash of input: {}", Sm3Util.toHex(hash));
-
-            TimeStampResult result = tsaClient.timestampWithSm3Hash(hash);
-
-            Map<String, Object> response = buildTimestampResponse(result, text);
-            response.put("sm3HashHex", Sm3Util.toHex(hash));
-
-            return ResponseEntity.ok(response);
-        } catch (TsaException e) {
-            logger.error("Timestamp request failed", e);
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "error", e.getMessage(),
-                    "errorCode", e.getErrorCode()
-            ));
-        }
+        byte[] data = text.getBytes(StandardCharsets.UTF_8);
+        byte[] hash = Sm3Util.hash(data);
+        TimeStampResult result = tsaClient.timestampWithSm3Hash(hash);
+        Map<String, Object> response = buildTimestampResponse(result, text);
+        response.put("sm3HashHex", Sm3Util.toHex(hash));
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -410,30 +417,33 @@ public class TsaDemoController {
         if (text == null || responseBase64 == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Missing required fields: text, responseBase64"));
         }
-        try {
-            // 使用 SDK 的验证方法，自动从 Token 内部提取证书
-            TimeStampVerifyResult verifyResult = tsaClient.verifyTimestamp(text, responseBase64);
-            // 组装响应
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("valid", verifyResult.isValid());
-            result.put("signatureValid", verifyResult.isSignatureValid());
-            result.put("hashMatch", verifyResult.isHashMatch());
-            result.put("certSubject", verifyResult.getCertSubject());
-            result.put("certExpiry", verifyResult.getCertExpiry().toString());
-            result.put("expectedHashHex", verifyResult.getExpectedHashHex());
-            result.put("tokenHashHex", verifyResult.getTokenHashHex());
-            result.put("serialNumber", verifyResult.getSerialNumber());
-            result.put("genTime", verifyResult.getGenTime().toString());
-            result.put("policyOid", verifyResult.getPolicyOid());
-            result.put("input", text);
-            return ResponseEntity.ok(result);
-        } catch (TsaException e) {
-            logger.error("Timestamp verification failed", e);
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
-        } catch (Exception e) {
-            logger.error("Timestamp verification failed", e);
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        // 使用 SDK 的验证方法，自动从 Token 内部提取证书
+        TimeStampVerifyResult verifyResult = tsaClient.verifyTimestamp(text, responseBase64);
+        return buildVerifyResponse(verifyResult, null);
+    }
+
+    /**
+     * 验证远端文件的时间戳令牌 (SDK 流式下载到本地临时目录后处理)
+     *
+     * POST /api/tsa/verify/remoteFile
+     * Body: {
+     *   "filePath": "/group1/default/document.pdf",
+     *   "responseBase64": "... (timestamp/remoteFile 返回的 responseBase64)"
+     * }
+     *
+     * 注意: 必须使用 responseBase64 (完整 TimeStampResponse) 而非 tokenBase64 进行验证
+     */
+    @PostMapping("/tsa/verify/remoteFile")
+    public ResponseEntity<Map<String, Object>> verifyRemoteFile(@RequestBody Map<String, String> body) {
+        String filePath = body.get("filePath");
+        String responseBase64 = body.get("responseBase64");
+        if (filePath == null || filePath.isBlank() || responseBase64 == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Missing required fields: filePath, responseBase64"
+            ));
         }
+        TimeStampVerifyResult verifyResult = tsaClient.verifyRemoteFile(filePath, responseBase64);
+        return buildVerifyResponse(verifyResult, filePath);
     }
 
     // ================================================================
@@ -443,19 +453,65 @@ public class TsaDemoController {
     private Map<String, Object> buildTimestampResponse(TimeStampResult result, String input) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("success", result.isSuccess());
-        response.put("status", result.getStatus());
-        response.put("statusString", result.getStatusString());
-        response.put("serialNumber", result.getSerialNumberHex());
-        response.put("genTime", result.getGenTime() != null ? result.getGenTime().toString() : null);
-        response.put("policyOid", result.getPolicyOid());
-        response.put("hashAlgorithmOid", result.getHashAlgorithmOid());
-        response.put("messageImprintHex", result.getMessageImprintHex());
-        response.put("tokenBase64", result.getTimeStampTokenBase64());
-        response.put("responseBase64", result.getEncodedResponseBase64());
-        response.put("tokenSize", result.getTimeStampToken() != null ? result.getTimeStampToken().length : 0);
+        // 请求过程出错时填充错误信息
+        if (result.getErrorCode() != null) {
+            response.put("errorCode", result.getErrorCode());
+            response.put("errorMessage", result.getErrorMessage());
+        } else {
+            response.put("status", result.getStatus());
+            response.put("statusString", result.getStatusString());
+            response.put("serialNumber", result.getSerialNumberHex());
+            response.put("genTime", result.getGenTime() != null ? result.getGenTime().toString() : null);
+            response.put("policyOid", result.getPolicyOid());
+            response.put("hashAlgorithmOid", result.getHashAlgorithmOid());
+            response.put("messageImprintHex", result.getMessageImprintHex());
+            response.put("tokenBase64", result.getTimeStampTokenBase64());
+            response.put("responseBase64", result.getEncodedResponseBase64());
+            response.put("tokenSize", result.getTimeStampToken() != null ? result.getTimeStampToken().length : 0);
+        }
         if (input != null) {
             response.put("input", input);
         }
         return response;
+    }
+
+    /**
+     * 构建验证结果响应
+     *
+     * @param verifyResult 验证结果
+     * @param remoteFilePath 远端文件路径 (本地验证时为 null)
+     * @return HTTP 响应
+     */
+    private ResponseEntity<Map<String, Object>> buildVerifyResponse(TimeStampVerifyResult verifyResult, String remoteFilePath) {
+        // 验证过程出错: 返回错误信息
+        if (verifyResult.getErrorCode() != null) {
+            Map<String, Object> errorResponse = new LinkedHashMap<>();
+            errorResponse.put("valid", false);
+            errorResponse.put("errorCode", verifyResult.getErrorCode());
+            errorResponse.put("errorMessage", verifyResult.getErrorMessage());
+            if (remoteFilePath != null) {
+                errorResponse.put("remoteFilePath", remoteFilePath);
+                errorResponse.put("source", "remote");
+            }
+            return ResponseEntity.ok(errorResponse);
+        }
+
+        // 正常验证结果
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("valid", verifyResult.isValid());
+        result.put("signatureValid", verifyResult.isSignatureValid());
+        result.put("hashMatch", verifyResult.isHashMatch());
+        result.put("certSubject", verifyResult.getCertSubject());
+        result.put("certExpiry", verifyResult.getCertExpiry() != null ? verifyResult.getCertExpiry().toString() : null);
+        result.put("expectedHashHex", verifyResult.getExpectedHashHex());
+        result.put("tokenHashHex", verifyResult.getTokenHashHex());
+        result.put("serialNumber", verifyResult.getSerialNumber());
+        result.put("genTime", verifyResult.getGenTime() != null ? verifyResult.getGenTime().toString() : null);
+        result.put("policyOid", verifyResult.getPolicyOid());
+        if (remoteFilePath != null) {
+            result.put("remoteFilePath", remoteFilePath);
+            result.put("source", "remote");
+        }
+        return ResponseEntity.ok(result);
     }
 }

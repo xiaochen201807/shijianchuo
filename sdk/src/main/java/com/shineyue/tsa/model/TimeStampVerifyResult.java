@@ -59,10 +59,29 @@ public class TimeStampVerifyResult {
      */
     private final String policyOid;
 
+    /**
+     * 错误码（验证过程出错时填充，验证正常时为 null）
+     */
+    private final String errorCode;
+
+    /**
+     * 错误消息（验证过程出错时填充，验证正常时为 null）
+     */
+    private final String errorMessage;
+
     public TimeStampVerifyResult(boolean valid, boolean signatureValid, boolean hashMatch,
                                   String certSubject, Date certExpiry,
                                   String expectedHashHex, String tokenHashHex,
                                   String serialNumber, Date genTime, String policyOid) {
+        this(valid, signatureValid, hashMatch, certSubject, certExpiry,
+                expectedHashHex, tokenHashHex, serialNumber, genTime, policyOid, null, null);
+    }
+
+    public TimeStampVerifyResult(boolean valid, boolean signatureValid, boolean hashMatch,
+                                  String certSubject, Date certExpiry,
+                                  String expectedHashHex, String tokenHashHex,
+                                  String serialNumber, Date genTime, String policyOid,
+                                  String errorCode, String errorMessage) {
         this.valid = valid;
         this.signatureValid = signatureValid;
         this.hashMatch = hashMatch;
@@ -73,6 +92,21 @@ public class TimeStampVerifyResult {
         this.serialNumber = serialNumber;
         this.genTime = genTime;
         this.policyOid = policyOid;
+        this.errorCode = errorCode;
+        this.errorMessage = errorMessage;
+    }
+
+    /**
+     * 创建验证失败的结果对象（验证过程异常时使用）
+     *
+     * @param errorCode    错误码
+     * @param errorMessage 错误消息
+     * @return 验证失败的结果对象 (valid=false)
+     */
+    public static TimeStampVerifyResult fail(String errorCode, String errorMessage) {
+        return new TimeStampVerifyResult(false, false, false,
+                null, null, null, null, null, null, null,
+                errorCode, errorMessage);
     }
 
     // ================================================================
@@ -119,8 +153,19 @@ public class TimeStampVerifyResult {
         return policyOid;
     }
 
+    public String getErrorCode() {
+        return errorCode;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
     @Override
     public String toString() {
+        if (errorCode != null) {
+            return "TimeStampVerifyResult{valid=false, errorCode='" + errorCode + "', errorMessage='" + errorMessage + "'}";
+        }
         return "TimeStampVerifyResult{" +
                 "valid=" + valid +
                 ", signatureValid=" + signatureValid +

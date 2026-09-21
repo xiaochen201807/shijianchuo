@@ -8,15 +8,23 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 在 application.yml 中配置示例:
  *
  * tsa:
+ *   enabled: true                   # 是否启用 SDK (默认 false, 需显式开启)
  *   url: http://localhost:8080/tsa
  *   connect-timeout: 5000
  *   read-timeout: 30000
  *   policy-oid: 1.2.3.4.1
  *   cert-req: true
  *   hash-algorithm: SM3
+ *   gofastdfs-store: http://192.168.1.10:8080
  */
 @ConfigurationProperties(prefix = "tsa")
 public class TsaProperties {
+
+    /**
+     * 是否启用 TSA SDK 自动配置
+     * 默认 false, 需显式配置 tsa.enabled=true 才会创建 TsaClient Bean
+     */
+    private boolean enabled = false;
 
     /**
      * TSA 服务器 URL (必须)
@@ -54,7 +62,23 @@ public class TsaProperties {
      */
     private boolean autoRegisterProvider = true;
 
+    /**
+     * GoFastDFS 文件存储服务地址 (远端文件的下载前缀, 包含 IP 与端口)
+     * 用于 timestampRemoteFile / verifyRemoteFile 远端文件打时间戳/验证,
+     * 实际请求地址 = gofastdfsStore + 传入的 filePath 参数
+     * 例如: http://192.168.1.10:8080
+     */
+    private String gofastdfsStore;
+
     // --- Getters & Setters ---
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
 
     public String getUrl() {
         return url;
@@ -112,16 +136,26 @@ public class TsaProperties {
         this.autoRegisterProvider = autoRegisterProvider;
     }
 
+    public String getGofastdfsStore() {
+        return gofastdfsStore;
+    }
+
+    public void setGofastdfsStore(String gofastdfsStore) {
+        this.gofastdfsStore = gofastdfsStore;
+    }
+
     @Override
     public String toString() {
         return "TsaProperties{" +
-                "url='" + url + '\'' +
+                "enabled=" + enabled +
+                ", url='" + url + '\'' +
                 ", connectTimeout=" + connectTimeout +
                 ", readTimeout=" + readTimeout +
                 ", policyOid='" + policyOid + '\'' +
                 ", certReq=" + certReq +
                 ", hashAlgorithm='" + hashAlgorithm + '\'' +
                 ", autoRegisterProvider=" + autoRegisterProvider +
+                ", gofastdfsStore='" + gofastdfsStore + '\'' +
                 '}';
     }
 }

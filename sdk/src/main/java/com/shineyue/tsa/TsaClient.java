@@ -11,7 +11,6 @@ import org.bouncycastle.cms.CMSSignedData;
 import org.bouncycastle.cms.SignerInformation;
 import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.tsp.TSPAlgorithms;
 import org.bouncycastle.tsp.TimeStampRequest;
 import org.bouncycastle.tsp.TimeStampRequestGenerator;
 import org.bouncycastle.tsp.TimeStampResponse;
@@ -27,13 +26,19 @@ import java.math.BigInteger;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.Security;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * TSA 客户端 - RFC 3161 时间戳请求客户端
@@ -60,6 +65,12 @@ import java.util.Date;
  *
  *   // 验证时间戳
  *   boolean valid = client.verifyTimestamp(result, tsaCertificate);
+ *
+ *   // 对远端文件打时间戳/验证 (需配置 tsa.gofastdfs-store)
+ *   props.setGofastdfsStore("http://192.168.1.10:8080");
+ *   TimeStampResult remoteResult = client.timestampRemoteFile("/group1/default/document.pdf");
+ *   TimeStampVerifyResult remoteVerify = client.verifyRemoteFile("/group1/default/document.pdf",
+ *           remoteResult.getEncodedResponseBase64());
  */
 public class TsaClient {
 
@@ -79,6 +90,11 @@ public class TsaClient {
      * RFC 3161 时间戳响应 Content-Type
      */
     private static final String CONTENT_TYPE_REPLY = "application/timestamp-reply";
+
+    /**
+     * 远端文件下载后本地临时目录名 (位于系统临时目录之下)
+     */
+    private static final String TEMP_DIR_NAME = "tsa";
 
     static {
         // 注册 BouncyCastle Provider
@@ -108,33 +124,35 @@ public class TsaClient {
      * 对原始数据请求时间戳 (使用 SM3 摘要)
      *
      * @param data 原始数据
-     * @return 时间戳结果
-     * @throws TsaException 如果请求失败
+     * @return 时间戳结果，请求过程出错时 isSuccess=false 且填充 errorCode/errorMessage
      */
-    public TimeStampResult timestamp(byte[] data) throws TsaException {
-        if (data == null) {
-            throw new TsaException("TSA_DATA_NULL", "Input data cannot be null");
+    public TimeStampResult timestamp(byte[] data) {
+        try {
+            if (data == null) {
+                return TimeStampResult.fail("TSA_DATA_NULL", "Input data cannot be null");
+            }
+            byte[] hash = Sm3Util.hash(data);
+            return timestampWithHash(hash, SM3_OID);
+        } catch (Exception e) {
+            return TimeStampResult.fail("TSA_REQUEST_FAILED", "Timestamp request failed: " + e.getMessage());
         }
-
-        logger.debug("Timestamping {} bytes of data", data.length);
-
-        // 1. 计算 SM3 摘要
-        byte[] hash = Sm3Util.hash(data);
-        logger.debug("SM3 hash: {}", Sm3Util.toHex(hash));
-
-        // 2. 发送时间戳请求
-        return timestampWithHash(hash, SM3_OID);
     }
 
     /**
      * 对字符串请求时间戳
      *
      * @param text 输入字符串
-     * @return 时间戳结果
-     * @throws TsaException 如果请求失败
+     * @return 时间戳结果，请求过程出错时 isSuccess=false 且填充 errorCode/errorMessage
      */
-    public TimeStampResult timestamp(String text) throws TsaException {
-        return timestamp(text.getBytes(StandardCharsets.UTF_8));
+    public TimeStampResult timestamp(String text) {
+        try {
+            if (text == null) {
+                return TimeStampResult.fail("TSA_DATA_NULL", "Input text cannot be null");
+            }
+            return timestamp(text.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            return TimeStampResult.fail("TSA_REQUEST_FAILED", "Timestamp request failed: " + e.getMessage());
+        }
     }
 
     /**
@@ -142,15 +160,17 @@ public class TsaClient {
      * 注意: 此方法会先计算整个流的 SM3 摘要
      *
      * @param inputStream 输入流
-     * @return 时间戳结果
-     * @throws TsaException 如果请求失败
+     * @return 时间戳结果，请求过程出错时 isSuccess=false 且填充 errorCode/errorMessage
      */
-    public TimeStampResult timestamp(InputStream inputStream) throws TsaException {
+    public TimeStampResult timestamp(InputStream inputStream) {
         try {
+            if (inputStream == null) {
+                return TimeStampResult.fail("TSA_DATA_NULL", "Input stream cannot be null");
+            }
             byte[] hash = Sm3Util.hash(inputStream);
             return timestampWithHash(hash, SM3_OID);
-        } catch (IOException e) {
-            throw new TsaException("TSA_STREAM_ERROR", "Failed to read input stream", e);
+        } catch (Exception e) {
+            return TimeStampResult.fail("TSA_REQUEST_FAILED", "Timestamp request failed: " + e.getMessage());
         }
     }
 
@@ -160,38 +180,70 @@ public class TsaClient {
      *
      * @param hash         预计算的摘要值
      * @param hashOid      摘要算法 OID (SM3: 1.2.156.10197.1.401)
-     * @return 时间戳结果
-     * @throws TsaException 如果请求失败
+     * @return 时间戳结果，请求过程出错时 isSuccess=false 且填充 errorCode/errorMessage
      */
-    public TimeStampResult timestampWithHash(byte[] hash, ASN1ObjectIdentifier hashOid) throws TsaException {
-        if (hash == null || hash.length == 0) {
-            throw new TsaException("TSA_HASH_EMPTY", "Hash value cannot be null or empty");
+    public TimeStampResult timestampWithHash(byte[] hash, ASN1ObjectIdentifier hashOid) {
+        try {
+            if (hash == null || hash.length == 0) {
+                return TimeStampResult.fail("TSA_HASH_EMPTY", "Hash value cannot be null or empty");
+            }
+
+            logger.info("Sending timestamp request to TSA: url={}, hashAlgorithm={}",
+                    properties.getUrl(), hashOid);
+
+            byte[] requestDer = buildTimeStampRequest(hash, hashOid);
+            byte[] responseDer = sendHttpPost(requestDer);
+            return parseTimeStampResponse(responseDer, hash, hashOid, requestDer);
+        } catch (Exception e) {
+            return TimeStampResult.fail("TSA_REQUEST_FAILED", "Timestamp request failed: " + e.getMessage());
         }
-
-        logger.info("Sending timestamp request to TSA: url={}, hashAlgorithm={}",
-                properties.getUrl(), hashOid);
-
-        // 1. 构造 RFC 3161 TimeStampReq
-        byte[] requestDer = buildTimeStampRequest(hash, hashOid);
-        logger.debug("TimeStampReq size: {} bytes", requestDer.length);
-
-        // 2. 发送 HTTP POST 请求
-        byte[] responseDer = sendHttpPost(requestDer);
-        logger.debug("TimeStampResp size: {} bytes", responseDer.length);
-
-        // 3. 解析响应
-        return parseTimeStampResponse(responseDer, hash, hashOid, requestDer);
     }
 
     /**
      * 使用 SM3 预计算摘要请求时间戳
      *
      * @param sm3Hash SM3 摘要值 (32 字节)
-     * @return 时间戳结果
-     * @throws TsaException 如果请求失败
+     * @return 时间戳结果，请求过程出错时 isSuccess=false 且填充 errorCode/errorMessage
      */
-    public TimeStampResult timestampWithSm3Hash(byte[] sm3Hash) throws TsaException {
-        return timestampWithHash(sm3Hash, SM3_OID);
+    public TimeStampResult timestampWithSm3Hash(byte[] sm3Hash) {
+        try {
+            return timestampWithHash(sm3Hash, SM3_OID);
+        } catch (Exception e) {
+            return TimeStampResult.fail("TSA_REQUEST_FAILED", "Timestamp request failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 对远端文件请求时间戳 (流式处理)
+     *
+     * 处理流程:
+     *   1. 通过 GET 请求从远端文件存储服务下载文件 (tsa.gofastdfs-store 配置值 + filePath)
+     *   2. 下载过程流式写入当前程序运行目录下的 temp 子目录, 不占用堆内存
+     *   3. 以文件流方式计算 SM3 摘要并请求时间戳
+     *   4. 无论成功或失败, 最后都会删除本地临时文件
+     *
+     * @param filePath 远端文件路径 (拼接到 gofastdfs_store 之后作为完整下载地址)
+     * @return 时间戳结果，请求过程出错时 isSuccess=false 且填充 errorCode/errorMessage
+     */
+    public TimeStampResult timestampRemoteFile(String filePath) {
+        if (filePath == null || filePath.trim().isEmpty()) {
+            return TimeStampResult.fail("TSA_DATA_NULL", "Remote file path cannot be null or empty");
+        }
+
+        Path tempFile = null;
+        try {
+            tempFile = downloadRemoteFile(filePath);
+            try (InputStream in = Files.newInputStream(tempFile)) {
+                byte[] hash = Sm3Util.hash(in);
+                return timestampWithHash(hash, SM3_OID);
+            }
+        } catch (TsaException e) {
+            return TimeStampResult.fail(e.getErrorCode(), e.getMessage());
+        } catch (Exception e) {
+            return TimeStampResult.fail("TSA_REQUEST_FAILED", "Timestamp request failed: " + e.getMessage());
+        } finally {
+            deleteQuietly(tempFile);
+        }
     }
 
     // ================================================================
@@ -238,16 +290,18 @@ public class TsaClient {
      *
      * @param data 原始数据（用于验证摘要是否匹配）
      * @param responseDer 时间戳响应 DER 编码数据
-     * @return 验证结果，包含签名有效性、摘要匹配、证书信息等
-     * @throws TsaException 如果验证过程出错
+     * @return 验证结果，包含签名有效性、摘要匹配、证书信息等，验证过程出错时 valid=false 且填充 errorCode/errorMessage
      */
-    public TimeStampVerifyResult verifyTimestamp(byte[] data, byte[] responseDer) throws TsaException {
-        if (data == null) {
-            throw new TsaException("TSA_DATA_NULL", "Input data cannot be null");
+    public TimeStampVerifyResult verifyTimestamp(byte[] data, byte[] responseDer) {
+        try {
+            if (data == null) {
+                return TimeStampVerifyResult.fail("TSA_DATA_NULL", "Input data cannot be null");
+            }
+            byte[] expectedHash = Sm3Util.hash(data);
+            return verifyWithHash(expectedHash, responseDer);
+        } catch (Exception e) {
+            return TimeStampVerifyResult.fail("TSA_VERIFY_FAILED", "Timestamp verification failed: " + e.getMessage());
         }
-        // 计算原始数据的 SM3 摘要，交给核心验证逻辑
-        byte[] expectedHash = Sm3Util.hash(data);
-        return verifyWithHash(expectedHash, responseDer);
     }
 
     /**
@@ -258,20 +312,18 @@ public class TsaClient {
      *
      * @param inputStream 原始数据输入流
      * @param responseDer 时间戳响应 DER 编码数据
-     * @return 验证结果，包含签名有效性、摘要匹配、证书信息等
-     * @throws TsaException 如果验证过程出错
+     * @return 验证结果，包含签名有效性、摘要匹配、证书信息等，验证过程出错时 valid=false 且填充 errorCode/errorMessage
      */
-    public TimeStampVerifyResult verifyTimestamp(InputStream inputStream, byte[] responseDer) throws TsaException {
-        if (inputStream == null) {
-            throw new TsaException("TSA_DATA_NULL", "Input stream cannot be null");
-        }
-        byte[] expectedHash;
+    public TimeStampVerifyResult verifyTimestamp(InputStream inputStream, byte[] responseDer) {
         try {
-            expectedHash = Sm3Util.hash(inputStream);
-        } catch (IOException e) {
-            throw new TsaException("TSA_STREAM_ERROR", "Failed to read input stream", e);
+            if (inputStream == null) {
+                return TimeStampVerifyResult.fail("TSA_DATA_NULL", "Input stream cannot be null");
+            }
+            byte[] expectedHash = Sm3Util.hash(inputStream);
+            return verifyWithHash(expectedHash, responseDer);
+        } catch (Exception e) {
+            return TimeStampVerifyResult.fail("TSA_VERIFY_FAILED", "Timestamp verification failed: " + e.getMessage());
         }
-        return verifyWithHash(expectedHash, responseDer);
     }
 
     /**
@@ -279,19 +331,22 @@ public class TsaClient {
      *
      * @param text 原始文本
      * @param responseBase64 Base64 编码的时间戳响应
-     * @return 验证结果
-     * @throws TsaException 如果验证过程出错
+     * @return 验证结果，验证过程出错时 valid=false 且填充 errorCode/errorMessage
      */
-    public TimeStampVerifyResult verifyTimestamp(String text, String responseBase64) throws TsaException {
-        if (text == null) {
-            throw new TsaException("TSA_DATA_NULL", "Input text cannot be null");
+    public TimeStampVerifyResult verifyTimestamp(String text, String responseBase64) {
+        try {
+            if (text == null) {
+                return TimeStampVerifyResult.fail("TSA_DATA_NULL", "Input text cannot be null");
+            }
+            if (responseBase64 == null || responseBase64.isEmpty()) {
+                return TimeStampVerifyResult.fail("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
+            }
+            byte[] expectedHash = Sm3Util.hash(text.getBytes(StandardCharsets.UTF_8));
+            byte[] responseDer = Base64.getDecoder().decode(responseBase64);
+            return verifyWithHash(expectedHash, responseDer);
+        } catch (Exception e) {
+            return TimeStampVerifyResult.fail("TSA_VERIFY_FAILED", "Timestamp verification failed: " + e.getMessage());
         }
-        if (responseBase64 == null || responseBase64.isEmpty()) {
-            throw new TsaException("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
-        }
-        byte[] expectedHash = Sm3Util.hash(text.getBytes(StandardCharsets.UTF_8));
-        byte[] responseDer = Base64.getDecoder().decode(responseBase64);
-        return verifyWithHash(expectedHash, responseDer);
     }
 
     /**
@@ -301,15 +356,56 @@ public class TsaClient {
      *
      * @param inputStream 原始数据输入流
      * @param responseBase64 Base64 编码的时间戳响应
-     * @return 验证结果
-     * @throws TsaException 如果验证过程出错
+     * @return 验证结果，验证过程出错时 valid=false 且填充 errorCode/errorMessage
      */
-    public TimeStampVerifyResult verifyTimestamp(InputStream inputStream, String responseBase64) throws TsaException {
-        if (responseBase64 == null || responseBase64.isEmpty()) {
-            throw new TsaException("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
+    public TimeStampVerifyResult verifyTimestamp(InputStream inputStream, String responseBase64) {
+        try {
+            if (responseBase64 == null || responseBase64.isEmpty()) {
+                return TimeStampVerifyResult.fail("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
+            }
+            byte[] responseDer = Base64.getDecoder().decode(responseBase64);
+            return verifyTimestamp(inputStream, responseDer);
+        } catch (Exception e) {
+            return TimeStampVerifyResult.fail("TSA_VERIFY_FAILED", "Timestamp verification failed: " + e.getMessage());
         }
-        byte[] responseDer = Base64.getDecoder().decode(responseBase64);
-        return verifyTimestamp(inputStream, responseDer);
+    }
+
+    /**
+     * 验证远端文件的时间戳令牌 (流式处理)
+     *
+     * 处理流程:
+     *   1. 通过 GET 请求从远端文件存储服务下载文件 (tsa.gofastdfs-store 配置值 + filePath)
+     *   2. 下载过程流式写入当前程序运行目录下的 temp 子目录, 不占用堆内存
+     *   3. 以文件流方式计算 SM3 摘要, 与 Base64 凭证做完整验证
+     *   4. 无论成功或失败, 最后都会删除本地临时文件
+     *
+     * @param filePath       远端文件路径 (拼接到 gofastdfs_store 之后作为完整下载地址)
+     * @param responseBase64 Base64 编码的时间戳响应 (timestampRemoteFile 返回的 encodedResponseBase64)
+     * @return 验证结果，验证过程出错时 valid=false 且填充 errorCode/errorMessage
+     */
+    public TimeStampVerifyResult verifyRemoteFile(String filePath, String responseBase64) {
+        if (filePath == null || filePath.trim().isEmpty()) {
+            return TimeStampVerifyResult.fail("TSA_DATA_NULL", "Remote file path cannot be null or empty");
+        }
+        if (responseBase64 == null || responseBase64.isEmpty()) {
+            return TimeStampVerifyResult.fail("TSA_RESPONSE_NULL", "Response Base64 cannot be null or empty");
+        }
+
+        Path tempFile = null;
+        try {
+            tempFile = downloadRemoteFile(filePath);
+            try (InputStream in = Files.newInputStream(tempFile)) {
+                byte[] hash = Sm3Util.hash(in);
+                byte[] responseDer = Base64.getDecoder().decode(responseBase64);
+                return verifyWithHash(hash, responseDer);
+            }
+        } catch (TsaException e) {
+            return TimeStampVerifyResult.fail(e.getErrorCode(), e.getMessage());
+        } catch (Exception e) {
+            return TimeStampVerifyResult.fail("TSA_VERIFY_FAILED", "Timestamp verification failed: " + e.getMessage());
+        } finally {
+            deleteQuietly(tempFile);
+        }
     }
 
     /**
@@ -319,15 +415,14 @@ public class TsaClient {
      *
      * @param expectedHash 原始数据已计算出的 SM3 摘要
      * @param responseDer 时间戳响应 DER 编码数据
-     * @return 验证结果
-     * @throws TsaException 如果验证过程出错
+     * @return 验证结果，验证过程出错时 valid=false 且填充 errorCode/errorMessage
      */
-    private TimeStampVerifyResult verifyWithHash(byte[] expectedHash, byte[] responseDer) throws TsaException {
+    private TimeStampVerifyResult verifyWithHash(byte[] expectedHash, byte[] responseDer) {
         if (expectedHash == null || expectedHash.length == 0) {
-            throw new TsaException("TSA_HASH_EMPTY", "Hash value cannot be null or empty");
+            return TimeStampVerifyResult.fail("TSA_HASH_EMPTY", "Hash value cannot be null or empty");
         }
         if (responseDer == null || responseDer.length == 0) {
-            throw new TsaException("TSA_RESPONSE_NULL", "Timestamp response data cannot be null or empty");
+            return TimeStampVerifyResult.fail("TSA_RESPONSE_NULL", "Timestamp response data cannot be null or empty");
         }
 
         try {
@@ -337,13 +432,13 @@ public class TsaClient {
             // 2. 检查响应状态
             int status = tsResponse.getStatus();
             if (status != 0 && status != 1) {
-                throw new TsaException("TSA_REJECTED",
+                return TimeStampVerifyResult.fail("TSA_REJECTED",
                         "TSA response status: " + status + " - " + tsResponse.getStatusString());
             }
 
             TimeStampToken token = tsResponse.getTimeStampToken();
             if (token == null) {
-                throw new TsaException("TSA_NO_TOKEN", "No timestamp token in response");
+                return TimeStampVerifyResult.fail("TSA_NO_TOKEN", "No timestamp token in response");
             }
 
             // 3. 从 Token 内部提取签名证书
@@ -361,7 +456,7 @@ public class TsaClient {
             }
 
             if (embeddedCert == null) {
-                throw new TsaException("TSA_NO_SIGNER_CERT", "No signer certificate found in token");
+                return TimeStampVerifyResult.fail("TSA_NO_SIGNER_CERT", "No signer certificate found in token");
             }
 
             // 4. 用 Token 内嵌证书验证签名
@@ -398,11 +493,9 @@ public class TsaClient {
                     token.getTimeStampInfo().getPolicy() != null ? token.getTimeStampInfo().getPolicy().getId() : null
             );
 
-        } catch (TsaException e) {
-            throw e;
         } catch (Exception e) {
             logger.error("Timestamp verification failed", e);
-            throw new TsaException("TSA_VERIFY_FAILED", "Timestamp verification failed", e);
+            return TimeStampVerifyResult.fail("TSA_VERIFY_FAILED", "Timestamp verification failed: " + e.getMessage());
         }
     }
 
@@ -425,6 +518,142 @@ public class TsaClient {
     // ================================================================
     // 内部方法
     // ================================================================
+
+    /**
+     * 校验远端文件存储配置是否可用
+     *
+     * @throws TsaException 如果 tsa.gofastdfs-store 未配置
+     */
+    private void assertRemoteStoreConfigured() throws TsaException {
+        if (properties.getGofastdfsStore() == null
+                || properties.getGofastdfsStore().trim().isEmpty()) {
+            throw new TsaException("TSA_CONFIG_MISSING",
+                    "Remote file store is not configured (tsa.gofastdfs-store)");
+        }
+    }
+
+    /**
+     * 通过 GET 请求下载远端文件到本地临时目录 (流式写入, 不占内存)
+     *
+     * 下载地址 = tsa.gofastdfs-store 配置值 + filePath
+     * 临时目录 = 当前程序运行目录下的 temp/
+     *
+     * @param filePath 远端文件路径
+     * @return 已下载完成的本地临时文件路径 (由调用方负责删除)
+     * @throws TsaException 如果配置缺失或下载失败
+     */
+    private Path downloadRemoteFile(String filePath) throws TsaException {
+        assertRemoteStoreConfigured();
+        String fullUrl = buildRemoteFileUrl(filePath);
+        logger.info("Downloading remote file: {}", fullUrl);
+
+        HttpURLConnection connection = null;
+        Path tempFile = null;
+        try {
+            URL url = URI.create(fullUrl).toURL();
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(properties.getConnectTimeout());
+            connection.setReadTimeout(properties.getReadTimeout());
+            connection.setDoInput(true);
+
+            int responseCode = connection.getResponseCode();
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                // 错误流必须读完才能归还连接
+                byte[] errorBytes = readStream(connection.getErrorStream());
+                String errorBody = errorBytes != null ? new String(errorBytes, StandardCharsets.UTF_8) : "";
+                throw new TsaException("TSA_DOWNLOAD_ERROR",
+                        "Download remote file failed, HTTP " + responseCode + ": " + errorBody);
+            }
+
+            // 确保本地临时目录存在 (当前程序运行目录下的 temp 子目录)
+            Path tempDir = Paths.get(TEMP_DIR_NAME);
+            Files.createDirectories(tempDir);
+            tempFile = tempDir.resolve(buildTempFileName(filePath));
+            // 流式下载写入本地临时文件
+            try (InputStream in = connection.getInputStream()) {
+                Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            logger.info("Remote file downloaded to temp: {} ({} bytes)", tempFile, Files.size(tempFile));
+            return tempFile;
+
+        } catch (TsaException e) {
+            deleteQuietly(tempFile);
+            throw e;
+        } catch (IOException | IllegalArgumentException e) {
+            // 下载失败清理半成品临时文件并丢弃坏连接
+            deleteQuietly(tempFile);
+            if (connection != null) {
+                connection.disconnect();
+            }
+            throw new TsaException("TSA_DOWNLOAD_ERROR", "Failed to download remote file: " + fullUrl, e);
+        }
+    }
+
+    /**
+     * 拼接远端文件完整下载地址: gofastdfs_store 前缀 + filePath
+     *
+     * filePath 按路径分段做 URL 编码 (保留 / 分隔符), 支持中文等特殊字符的文件名
+     */
+    private String buildRemoteFileUrl(String filePath) {
+        String base = properties.getGofastdfsStore();
+        StringBuilder url = new StringBuilder(base);
+        if (!base.endsWith("/") && !filePath.startsWith("/")) {
+            url.append('/');
+        }
+        url.append(encodePathSegments(filePath));
+        return url.toString();
+    }
+
+    /**
+     * 对文件路径按分段做 URL 编码, 保留路径分隔符 /
+     * URLEncoder 会将空格编码为 + (query 语义), 需还原为 %20 (path 语义)
+     */
+    private String encodePathSegments(String path) {
+        String[] segments = path.split("/", -1);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < segments.length; i++) {
+            if (i > 0) {
+                sb.append('/');
+            }
+            if (!segments[i].isEmpty()) {
+                sb.append(URLEncoder.encode(segments[i], StandardCharsets.UTF_8).replace("+", "%20"));
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 生成临时文件名: tsa-<UUID>-<原始文件名>
+     *
+     * 保留原始文件名便于排查, 同时清理 Windows 非法文件名字符避免落盘失败
+     */
+    private String buildTempFileName(String filePath) {
+        String name = filePath;
+        int idx = filePath.lastIndexOf('/');
+        if (idx >= 0) {
+            name = filePath.substring(idx + 1);
+        }
+        name = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (name.isEmpty()) {
+            name = "download";
+        }
+        return "tsa-" + UUID.randomUUID() + "-" + name;
+    }
+
+    /**
+     * 静默删除本地临时文件, 删除失败仅记录告警日志
+     */
+    private void deleteQuietly(Path path) {
+        if (path == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            logger.warn("Failed to delete temp file: {}", path, e);
+        }
+    }
 
     /**
      * 构建 RFC 3161 TimeStampReq 请求

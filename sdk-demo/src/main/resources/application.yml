@@ -14,9 +14,10 @@ spring:
   application:
     name: tsa-demo
 
-# TSA SDK 配置
+# TSA SDK 配置 (需显式启用)
 # 环境变量覆盖示例: TSA_URL=http://192.168.1.10:8080/tsa
 tsa:
+  enabled: true   # 显式启用 SDK (默认 false, 不配置此项则 SDK 不加载)
   url: ${TSA_URL:http://127.0.0.1:9001/tsa}
   connect-timeout: ${TSA_CONNECT_TIMEOUT:5000}
   read-timeout: ${TSA_READ_TIMEOUT:30000}
@@ -24,6 +25,10 @@ tsa:
   cert-req: true
   hash-algorithm: SM3
   auto-register-provider: true
+  # GoFastDFS 文件存储服务地址 (远端文件下载前缀, IP+端口)
+  # 用于 TsaClient.timestampRemoteFile / verifyRemoteFile
+  # 实际下载地址 = gofastdfs-store + 传入的 filePath 参数
+  gofastdfs-store: ${GOFASTDFS_STORE_URL:http://127.0.0.1:8080}
 
 # 日志配置
 logging:

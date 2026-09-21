@@ -62,11 +62,35 @@ public class TimeStampResult {
      */
     private final String statusString;
 
+    /**
+     * 是否成功（status=0 或 1 且无错误时为 true）
+     */
+    private final boolean success;
+
+    /**
+     * 错误码（请求过程出错时填充，正常时为 null）
+     */
+    private final String errorCode;
+
+    /**
+     * 错误消息（请求过程出错时填充，正常时为 null）
+     */
+    private final String errorMessage;
+
     // 构造器
     public TimeStampResult(byte[] encodedResponse, byte[] timeStampToken,
                            BigInteger serialNumber, Date genTime,
                            String policyOid, String hashAlgorithmOid,
                            byte[] messageImprint, int status, String statusString) {
+        this(encodedResponse, timeStampToken, serialNumber, genTime,
+                policyOid, hashAlgorithmOid, messageImprint, status, statusString, null, null);
+    }
+
+    public TimeStampResult(byte[] encodedResponse, byte[] timeStampToken,
+                           BigInteger serialNumber, Date genTime,
+                           String policyOid, String hashAlgorithmOid,
+                           byte[] messageImprint, int status, String statusString,
+                           String errorCode, String errorMessage) {
         this.encodedResponse = encodedResponse;
         this.timeStampToken = timeStampToken;
         this.serialNumber = serialNumber;
@@ -76,6 +100,21 @@ public class TimeStampResult {
         this.messageImprint = messageImprint;
         this.status = status;
         this.statusString = statusString;
+        this.errorCode = errorCode;
+        this.errorMessage = errorMessage;
+        this.success = errorCode == null && (status == 0 || status == 1);
+    }
+
+    /**
+     * 创建请求失败的结果对象（请求过程异常时使用）
+     *
+     * @param errorCode    错误码
+     * @param errorMessage 错误消息
+     * @return 失败的结果对象 (isSuccess=false)
+     */
+    public static TimeStampResult fail(String errorCode, String errorMessage) {
+        return new TimeStampResult(null, null, BigInteger.ZERO, null,
+                null, null, null, -1, null, errorCode, errorMessage);
     }
 
     // ================================================================
@@ -93,7 +132,7 @@ public class TimeStampResult {
      * 获取原始时间戳响应 (Base64 编码)
      */
     public String getEncodedResponseBase64() {
-        return Base64.getEncoder().encodeToString(encodedResponse);
+        return encodedResponse != null ? Base64.getEncoder().encodeToString(encodedResponse) : null;
     }
 
     /**
@@ -107,7 +146,7 @@ public class TimeStampResult {
      * 获取时间戳令牌 (Base64 编码)
      */
     public String getTimeStampTokenBase64() {
-        return Base64.getEncoder().encodeToString(timeStampToken);
+        return timeStampToken != null ? Base64.getEncoder().encodeToString(timeStampToken) : null;
     }
 
     /**
@@ -182,13 +221,25 @@ public class TimeStampResult {
      * 是否成功
      */
     public boolean isSuccess() {
-        return status == 0 || status == 1;
+        return success;
+    }
+
+    public String getErrorCode() {
+        return errorCode;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
     }
 
     @Override
     public String toString() {
+        if (errorCode != null) {
+            return "TimeStampResult{success=false, errorCode='" + errorCode + "', errorMessage='" + errorMessage + "'}";
+        }
         return "TimeStampResult{" +
-                "status=" + status +
+                "success=" + success +
+                ", status=" + status +
                 ", statusString='" + statusString + '\'' +
                 ", serialNumber=" + getSerialNumberHex() +
                 ", genTime=" + genTime +

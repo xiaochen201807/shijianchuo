@@ -22,6 +22,7 @@ import java.security.Security;
  * 可通过 application.yml 配置:
  *
  * tsa:
+ *   enabled: true                  # 是否启用 TSA SDK (默认不启用, 需显式配置为 true)
  *   url: http://localhost:8080/tsa
  *   connect-timeout: 5000
  *   read-timeout: 30000
@@ -30,12 +31,13 @@ import java.security.Security;
  *   hash-algorithm: SM3
  *   auto-register-provider: true
  *
- * 也可以通过设置 tsa.enabled=false 来禁用自动配置
+ * 默认情况下 SDK 不会自动加载, 需显式配置 tsa.enabled=true 才会创建 TsaClient Bean。
+ * 适用于 SDK 已集成但当前项目不需要 TSA 功能的场景, 避免无效 Bean 加载。
  */
 @Configuration
 @EnableConfigurationProperties(TsaProperties.class)
 @ConditionalOnClass(TsaClient.class)
-@ConditionalOnProperty(prefix = "tsa", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "tsa", name = "enabled", havingValue = "true", matchIfMissing = false)
 @ImportRuntimeHints(TsaRuntimeHints.class)
 public class TsaAutoConfiguration {
 
@@ -45,6 +47,7 @@ public class TsaAutoConfiguration {
      * 创建 TsaClient Bean
      *
      * 当容器中不存在 TsaClient 时自动创建
+     * 未配置 tsa.gofastdfs-store 时远端文件方法将抛出 TSA_CONFIG_MISSING
      */
     @Bean
     @ConditionalOnMissingBean(TsaClient.class)
