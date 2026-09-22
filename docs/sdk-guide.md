@@ -18,7 +18,7 @@ TSA Spring Boot Starter 是一个基于 RFC 3161 时间戳协议的 Spring Boot 
 <dependency>
     <groupId>com.shineyue.tsa</groupId>
     <artifactId>tsa-spring-boot-starter</artifactId>
-    <version>1.0.4</version>
+    <version>1.0.5</version>
 </dependency>
 ```
 
@@ -193,7 +193,7 @@ try (InputStream in = Files.newInputStream(Path.of("largefile.dat"))) {
 基于远端文件路径直接打时间戳/验证，无需手动下载文件。SDK 内部流程：
 
 1. GET 请求下载：实际地址 = `tsa.gofastdfs-store` 配置值 + 传入的 `filePath` 参数
-2. 下载流式写入当前程序运行目录下的 `temp/` 子目录，不占用堆内存
+2. 下载流式写入当前程序运行目录下的 `tsa/` 子目录，不占用堆内存
 3. 以文件流方式计算 SM3 摘要并请求/验证时间戳
 4. 无论成功或失败，临时文件最终都会被自动删除
 

@@ -544,8 +544,14 @@ public class TsaClient {
      */
     private Path downloadRemoteFile(String filePath) throws TsaException {
         assertRemoteStoreConfigured();
-        String fullUrl = buildRemoteFileUrl(filePath);
-        logger.info("Downloading remote file: {}", fullUrl);
+
+        // 1. 调用 transform 接口将逻辑路径转化为实际存储路径
+        String resolvedPath = resolveTransformedPath(filePath);
+        logger.info("Resolved actual path: {}", resolvedPath);
+
+        // 2. 用转化后的路径构建下载地址
+        String fullUrl = buildRemoteFileUrl(resolvedPath);
+        logger.info("Downloading remote file: {} (original: {})", fullUrl, filePath);
 
         HttpURLConnection connection = null;
         Path tempFile = null;
@@ -569,7 +575,7 @@ public class TsaClient {
             // 确保本地临时目录存在 (当前程序运行目录下的 temp 子目录)
             Path tempDir = Paths.get(TEMP_DIR_NAME);
             Files.createDirectories(tempDir);
-            tempFile = tempDir.resolve(buildTempFileName(filePath));
+            tempFile = tempDir.resolve(buildTempFileName(resolvedPath));
             // 流式下载写入本地临时文件
             try (InputStream in = connection.getInputStream()) {
                 Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
@@ -588,6 +594,158 @@ public class TsaClient {
             }
             throw new TsaException("TSA_DOWNLOAD_ERROR", "Failed to download remote file: " + fullUrl, e);
         }
+    }
+
+    /**
+     * 调用 GoFastDFS transform 接口，将逻辑文件路径转化为实际存储路径
+     *
+     * 请求: POST {gofastdfs-store}/group1/transform/filePath
+     *       Content-Type: application/json
+     *       Body: {"path": "/storeIdentity/xxx/file.jpg"}
+     * 响应 JSON: {"code": 0, "data": "/group1/@xxx/actual/path.jpg", "msg": "转化成功"}
+     *
+     * 当 code == 0 时取 data 字段作为实际路径，否则抛出异常
+     *
+     * @param filePath 原始逻辑文件路径
+     * @return 转化后的实际存储路径
+     * @throws TsaException 如果转化接口调用失败或返回非 0 code
+     */
+    private String resolveTransformedPath(String filePath) throws TsaException {
+        String transformUrl = buildTransformUrl();
+        logger.info("Calling transform API: {}", transformUrl);
+
+        HttpURLConnection connection = null;
+        try {
+            URL url = URI.create(transformUrl).toURL();
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            connection.setConnectTimeout(properties.getConnectTimeout());
+            connection.setReadTimeout(properties.getReadTimeout());
+            connection.setDoOutput(true);
+            connection.setDoInput(true);
+
+            // 构造 JSON 请求体: {"path": "filePath"}
+            String requestBody = "{\"path\":\"" + escapeJsonString(filePath) + "\"}";
+            try (OutputStream os = connection.getOutputStream()) {
+                os.write(requestBody.getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            }
+
+            int responseCode = connection.getResponseCode();
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                byte[] errorBytes = readStream(connection.getErrorStream());
+                String errorBody = errorBytes != null ? new String(errorBytes, StandardCharsets.UTF_8) : "";
+                throw new TsaException("TSA_TRANSFORM_ERROR",
+                        "Transform API failed, HTTP " + responseCode + ": " + errorBody);
+            }
+
+            // 读取 JSON 响应
+            byte[] responseBytes;
+            try (InputStream in = connection.getInputStream()) {
+                responseBytes = readStream(in);
+            }
+            String json = new String(responseBytes, StandardCharsets.UTF_8);
+            logger.debug("Transform API response: {}", json);
+
+            // 解析 code 字段: 检查是否为 0 (成功)
+            if (!json.contains("\"code\":0") && !json.contains("\"code\": 0")) {
+                // 尝试提取 msg 用于错误信息
+                String msg = extractJsonStringField(json, "msg");
+                throw new TsaException("TSA_TRANSFORM_ERROR",
+                        "Transform API returned error: " + (msg != null ? msg : json));
+            }
+
+            // 提取 data 字段 (转化后的实际路径)
+            String data = extractJsonStringField(json, "data");
+            if (data == null || data.isEmpty()) {
+                throw new TsaException("TSA_TRANSFORM_ERROR",
+                        "Transform API returned empty data field");
+            }
+
+            logger.info("Transformed path: {} -> {}", filePath, data);
+            return data;
+
+        } catch (TsaException e) {
+            throw e;
+        } catch (IOException | IllegalArgumentException e) {
+            if (connection != null) {
+                connection.disconnect();
+            }
+            throw new TsaException("TSA_TRANSFORM_ERROR",
+                    "Failed to call transform API for: " + filePath, e);
+        }
+    }
+
+    /**
+     * 拼接 transform 接口地址: gofastdfs_store + /group1/transform/filePath
+     */
+    private String buildTransformUrl() {
+        String base = properties.getGofastdfsStore();
+        StringBuilder url = new StringBuilder(base);
+        if (!base.endsWith("/")) {
+            url.append('/');
+        }
+        url.append("group1/transform/filePath");
+        return url.toString();
+    }
+
+    /**
+     * 转义 JSON 字符串值中的特殊字符 (双引号、反斜杠、控制字符)
+     * 确保 filePath 嵌入 JSON 值时不会破坏结构
+     */
+    private String escapeJsonString(String value) {
+        StringBuilder sb = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n");  break;
+                case '\r': sb.append("\\r");  break;
+                case '\t': sb.append("\\t");  break;
+                default:   sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 从 JSON 字符串中提取指定 key 的字符串值 (轻量解析，无第三方 JSON 库依赖)
+     * 仅支持简单 JSON 对象中顶层字符串字段提取
+     *
+     * @param json JSON 字符串
+     * @param key  要提取的字段名
+     * @return 字段值，未找到返回 null
+     */
+    private String extractJsonStringField(String json, String key) {
+        String searchKey = "\"" + key + "\"";
+        int searchFrom = 0;
+        while (searchFrom < json.length()) {
+            int keyIdx = json.indexOf(searchKey, searchFrom);
+            if (keyIdx < 0) {
+                return null;
+            }
+            // 确认后面紧跟 ':' (跳过空白), 确保匹配的是 JSON key 而非其他字段的子串
+            // 例如搜索 "data" 不会误匹配到 "datas"
+            int afterKey = keyIdx + searchKey.length();
+            while (afterKey < json.length() && (json.charAt(afterKey) == ' ' || json.charAt(afterKey) == '\t')) {
+                afterKey++;
+            }
+            if (afterKey < json.length() && json.charAt(afterKey) == ':') {
+                int startQuote = json.indexOf('"', afterKey + 1);
+                if (startQuote < 0) {
+                    return null;
+                }
+                int endQuote = json.indexOf('"', startQuote + 1);
+                if (endQuote < 0) {
+                    return null;
+                }
+                return json.substring(startQuote + 1, endQuote);
+            }
+            searchFrom = keyIdx + 1;
+        }
+        return null;
     }
 
     /**
