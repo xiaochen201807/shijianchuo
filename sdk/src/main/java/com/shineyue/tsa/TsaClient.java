@@ -818,8 +818,13 @@ public class TsaClient {
         if (idx >= 0) {
             name = filePath.substring(idx + 1);
         }
+        // 替换 Windows 非法文件名字符
         name = name.replaceAll("[\\\\/:*?\"<>|]", "_");
-        if (name.isEmpty()) {
+        // 替换非 ASCII 可打印字符 (中文等): GraalVM Native Image 文件系统不支持非 ASCII 文件名
+        name = name.replaceAll("[^\\x20-\\x7E]", "_");
+        // 合并连续下划线
+        name = name.replaceAll("_+", "_");
+        if (name.isEmpty() || name.equals("_")) {
             name = "download";
         }
         return "tsa-" + UUID.randomUUID() + "-" + name;
