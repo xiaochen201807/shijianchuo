@@ -553,15 +553,19 @@ public class TsaClient {
         // GoFastDFS 不认 %40, 但 Tomcat 拒绝裸非 ASCII 和 URL 保留字符
         String base = properties.getGofastdfsStore();
         String encodedPath = encodePath(resolvedPath);
-        String fullUrl = base.endsWith("/") || encodedPath.startsWith("/")
-                ? base + encodedPath
-                : base + "/" + encodedPath;
-        logger.info("Downloading remote file: {} (original: {})", fullUrl, filePath);
-
         HttpURLConnection connection = null;
         Path tempFile = null;
+        String fullUrl = base + encodedPath;
+        logger.info("Downloading remote file: {} (original: {})", fullUrl, filePath);
         try {
-            URL url = URI.create(fullUrl).toURL();
+            // 用 URL 四参数构造器直接存储已编码路径, 绕过 URI.create()/parseURL()
+            // 避免 GraalVM Native Image 的 HttpURLConnection 对 % 做二次编码
+            @SuppressWarnings("deprecation")
+            URL baseUrl = new URL(base);
+            @SuppressWarnings("deprecation")
+            URL url = new URL(baseUrl.getProtocol(), baseUrl.getHost(),
+                    baseUrl.getPort(), encodedPath);
+
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(properties.getConnectTimeout());
@@ -573,6 +577,9 @@ public class TsaClient {
                 // 错误流必须读完才能归还连接
                 byte[] errorBytes = readStream(connection.getErrorStream());
                 String errorBody = errorBytes != null ? new String(errorBytes, StandardCharsets.UTF_8) : "";
+                logger.error("[DOWNLOAD-DIAG] HTTP={} | runtime={} | resolvedPath={} | encodedPath={} | url.getFile()={} | url.toExternalForm()={} | responseBody={}",
+                        responseCode, System.getProperty("java.vm.name"),
+                        resolvedPath, encodedPath, url.getFile(), url.toExternalForm(), errorBody);
                 throw new TsaException("TSA_DOWNLOAD_ERROR",
                         "Download remote file failed, HTTP " + responseCode + ": " + errorBody);
             }
@@ -593,11 +600,16 @@ public class TsaClient {
             throw e;
         } catch (IOException | IllegalArgumentException e) {
             // 下载失败清理半成品临时文件并丢弃坏连接
+            logger.error("[DOWNLOAD-DIAG] EXCEPTION | runtime={} | resolvedPath={} | encodedPath={} | fullUrl={} | exType={} | exMsg={}",
+                    System.getProperty("java.vm.name"), resolvedPath, encodedPath, fullUrl,
+                    e.getClass().getName(), e.getMessage(), e);
             deleteQuietly(tempFile);
             if (connection != null) {
                 connection.disconnect();
             }
-            throw new TsaException("TSA_DOWNLOAD_ERROR", "Failed to download remote file: " + fullUrl, e);
+            throw new TsaException("TSA_DOWNLOAD_ERROR",
+                    "Failed to download remote file: " + fullUrl
+                            + " (" + e.getClass().getSimpleName() + ": " + e.getMessage() + ")", e);
         }
     }
 
