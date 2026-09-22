@@ -26,7 +26,6 @@ import java.math.BigInteger;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -550,7 +549,13 @@ public class TsaClient {
         logger.info("Resolved actual path: {}", resolvedPath);
 
         // 2. 用转化后的路径构建下载地址
-        String fullUrl = buildRemoteFileUrl(resolvedPath);
+        // 只对路径部分做 percent-encode (base URL 包含 :// 和端口不能编码)
+        // GoFastDFS 不认 %40, 但 Tomcat 拒绝裸非 ASCII 和 URL 保留字符
+        String base = properties.getGofastdfsStore();
+        String encodedPath = encodePath(resolvedPath);
+        String fullUrl = base.endsWith("/") || encodedPath.startsWith("/")
+                ? base + encodedPath
+                : base + "/" + encodedPath;
         logger.info("Downloading remote file: {} (original: {})", fullUrl, filePath);
 
         HttpURLConnection connection = null;
@@ -749,36 +754,45 @@ public class TsaClient {
     }
 
     /**
-     * 拼接远端文件完整下载地址: gofastdfs_store 前缀 + filePath
+     * 对 URL 路径做选择性 percent-encode
      *
-     * filePath 按路径分段做 URL 编码 (保留 / 分隔符), 支持中文等特殊字符的文件名
+     * 保留安全的字符不编码:
+     *   - 字母数字 (a-z A-Z 0-9)
+     *   - RFC 3986 unreserved: - _ . ~
+     *   - / (路径分隔符)
+     *   - @ (GoFastDFS 不认 %40, 必须保持原样)
+     *
+     * 其他所有字符均做 UTF-8 percent-encode, 包括:
+     *   - 非 ASCII 字符 (中文等) — Tomcat 拒绝裸非 ASCII
+     *   - URL 保留字符 (? # { } % 空格 等) — Tomcat 视为请求行分隔符
      */
-    private String buildRemoteFileUrl(String filePath) {
-        String base = properties.getGofastdfsStore();
-        StringBuilder url = new StringBuilder(base);
-        if (!base.endsWith("/") && !filePath.startsWith("/")) {
-            url.append('/');
-        }
-        url.append(encodePathSegments(filePath));
-        return url.toString();
-    }
-
-    /**
-     * 对文件路径按分段做 URL 编码, 保留路径分隔符 /
-     * URLEncoder 会将空格编码为 + (query 语义), 需还原为 %20 (path 语义)
-     */
-    private String encodePathSegments(String path) {
-        String[] segments = path.split("/", -1);
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < segments.length; i++) {
-            if (i > 0) {
-                sb.append('/');
-            }
-            if (!segments[i].isEmpty()) {
-                sb.append(URLEncoder.encode(segments[i], StandardCharsets.UTF_8).replace("+", "%20"));
+    private String encodePath(String value) {
+        StringBuilder sb = new StringBuilder(value.length() * 2);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (isPathSafe(c)) {
+                sb.append(c);
+            } else {
+                byte[] bytes = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
+                for (byte b : bytes) {
+                    sb.append('%');
+                    sb.append(String.format("%02X", b & 0xFF));
+                }
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * 判断字符是否为 URL 路径安全字符 (不需编码)
+     */
+    private boolean isPathSafe(char c) {
+        return (c >= 'a' && c <= 'z')
+                || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9')
+                || c == '-' || c == '_' || c == '.' || c == '~'
+                || c == '/'
+                || c == '@';
     }
 
     /**
