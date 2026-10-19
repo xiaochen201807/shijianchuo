@@ -34,11 +34,17 @@ COPY sdk ./sdk
 COPY sdk-demo ./sdk-demo
 COPY tsa-server-java ./tsa-server-java
 
-RUN mvn -B -f pom.xml -pl sdk -am clean install -DskipTests \
+# 打印构建环境信息 (ARCH/PAGESIZE)，便于诊断 ARM64 64KB 页兼容性问题
+# 若 ARCH=aarch64 且 pom.xml 的 native-arm64-bigpage profile 生效，
+# 产出二进制会按 64KB 页对齐，可同时运行于 4KB/16KB/64KB 页的 ARM64 主机
+RUN echo "== Native build environment ==" \
+    && echo "ARCH=$(uname -m)  KERNEL=$(uname -r)  PAGESIZE=$(getconf PAGESIZE)" \
+    && mvn -B -f pom.xml -pl sdk -am clean install -DskipTests \
     && mvn -B -f pom.xml -pl sdk-demo -am -Pnative -DskipTests package \
     && mvn -B -f pom.xml -pl tsa-server-java -am -Pnative -DskipTests package \
     && test -x sdk-demo/target/tsa-demo \
     && test -x tsa-server-java/target/tsa-server-java \
+    && echo "== Native build artifacts ==" \
     && ls -lh sdk-demo/target/tsa-demo tsa-server-java/target/tsa-server-java \
     && (file sdk-demo/target/tsa-demo tsa-server-java/target/tsa-server-java || true)
 

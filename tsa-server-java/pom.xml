@@ -120,5 +120,35 @@
                 </plugins>
             </build>
         </profile>
+
+        <!-- ============================================================
+             ARM64 大页(64KB)兼容 profile
+             构建容器 os.arch=aarch64 时自动激活，强制 native-image 按
+             64KB 页对齐，产出二进制可同时跑在 4KB / 16KB / 64KB 页的
+             ARM64 服务器 (AWS Graviton、Apple Silicon、阿里倚天、华为鲲鹏)
+             x86_64 构建不受影响，仍使用默认 4KB 页。
+             ============================================================ -->
+        <profile>
+            <id>native-arm64-bigpage</id>
+            <activation>
+                <os>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <configuration>
+                            <buildArgs combine.children="append">
+                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                                <buildArg>-H:PageSize=65536</buildArg>
+                            </buildArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>
